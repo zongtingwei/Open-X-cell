@@ -4,7 +4,7 @@
 
 **Goal:** Build a clean-room, runnable Open-X-Cell reproduction with PyTorch model code, diffusion masking, prior embeddings, AnnData data handling, training/prediction/evaluation CLIs, and synthetic tests.
 
-**Architecture:** Implement a separate `open_x_cell` package inside the existing repository so current Lingshu-Cell files are left untouched. Start from small tested primitives, then compose them into model, losses, data loaders, training loop, inference loop, and CLI workflows. Use a `tiny` preset for local verification while exposing paper-aligned `mini` and `ultra` configs.
+**Architecture:** Implement a dedicated `open_x_cell` package for this repository. Start from small tested primitives, then compose them into model, losses, data loaders, training loop, inference loop, and CLI workflows. Use a `tiny` preset for local verification while exposing paper-aligned `mini` and `ultra` configs.
 
 **Tech Stack:** Python 3.10+, PyTorch, NumPy, SciPy optional, AnnData optional for data/CLI tests, pytest, PyYAML optional for config files.
 
@@ -27,7 +27,7 @@
 - Modify `pyproject.toml`: add package discovery under `src`, dependencies, and CLI entrypoint while preserving existing project behavior.
 - Modify `.gitignore`: ignore generated runs, data, caches, and checkpoint artifacts.
 - Create `configs/open_x_cell_tiny.yaml`: tiny smoke-test training config.
-- Create tests under `tests/open_x_cell/` so existing Lingshu tests remain isolated.
+- Create tests under `tests/open_x_cell/`.
 - Modify `README.md`: add Open-X-Cell clean-room section and commands.
 
 ## Task 1: Package Metadata And Configs
@@ -560,4 +560,3 @@ git commit -m "docs: document open x-cell reproduction workflow"
 - Placeholder scan: no task relies on "TBD", "TODO", "similar to", or unspecified implementation.
 - Type consistency: config names, CLI commands, and tensor names are consistent across tasks.
 - Scope: this plan targets a runnable clean-room reproduction and avoids H200-scale training claims.
-

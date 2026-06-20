@@ -29,8 +29,8 @@ dev = [
 open-x-cell = "open_x_cell.cli:main"
 
 [tool.setuptools.packages.find]
-where = [".", "src"]
-include = ["lingshu_cell*", "open_x_cell*"]
+where = ["src"]
+include = ["open_x_cell*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
