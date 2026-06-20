@@ -7,7 +7,7 @@ import torch
 from anndata import AnnData, read_h5ad
 
 from open_x_cell.diffusion import cumulative_reveal_steps
-from open_x_cell.priors import make_zero_priors
+from open_x_cell.priors import PriorStore, make_zero_priors
 from open_x_cell.training import load_checkpoint
 
 
@@ -17,6 +17,7 @@ def predict_adata(
     perturbation: str,
     output_path: str | Path,
     seed: int = 0,
+    prior_files: dict[str, str | Path | None] | None = None,
 ) -> AnnData:
     model, config, _ = load_checkpoint(checkpoint_path)
     adata = read_h5ad(adata_path)
@@ -35,7 +36,10 @@ def predict_adata(
     gene_ids = torch.arange(config.context_length).repeat(1, 1)
     gene_to_id = {name: idx for idx, name in enumerate(adata.var_names[: config.num_genes])}
     perturbation_id = torch.tensor([gene_to_id.get(perturbation, 0)], dtype=torch.long)
-    priors = make_zero_priors(1, config)
+    if prior_files:
+        priors = PriorStore.from_files(prior_files, config).batch_for_perturbations((perturbation,), config)
+    else:
+        priors = make_zero_priors(1, config)
     steps = cumulative_reveal_steps(config.context_length, config.diffusion_fractions, seed=seed)
     with torch.no_grad():
         final = None

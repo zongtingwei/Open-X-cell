@@ -68,7 +68,7 @@ class TrainingConfig:
     set_size: int = 8
     max_steps: int = 10
     learning_rate: float = 1e-3
-    weight_decay: float = 0.0
+    weight_decay: float = 0.01
     beta1: float = 0.9
     beta2: float = 0.999
     warmup_fraction: float = 0.1

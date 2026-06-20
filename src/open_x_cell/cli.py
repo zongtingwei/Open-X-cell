@@ -6,7 +6,25 @@ from pathlib import Path
 from open_x_cell.evaluation import evaluate_prediction_files
 from open_x_cell.inference import predict_adata
 from open_x_cell.synthetic import make_synthetic_adata
-from open_x_cell.training import train_tiny
+from open_x_cell.training import train_model
+
+
+def _add_prior_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--esm-priors", default=None)
+    parser.add_argument("--string-priors", default=None)
+    parser.add_argument("--genept-priors", default=None)
+    parser.add_argument("--depmap-priors", default=None)
+    parser.add_argument("--cell-painting-priors", default=None)
+
+
+def _prior_files_from_args(args: argparse.Namespace) -> dict[str, str | None]:
+    return {
+        "esm": args.esm_priors,
+        "string": args.string_priors,
+        "genept": args.genept_priors,
+        "depmap": args.depmap_priors,
+        "cell_painting": args.cell_painting_priors,
+    }
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -23,7 +41,15 @@ def build_parser() -> argparse.ArgumentParser:
     train = sub.add_parser("train")
     train.add_argument("--adata", required=True)
     train.add_argument("--output", required=True)
+    train.add_argument("--model-size", choices=("tiny", "mini", "ultra"), default="tiny")
+    train.add_argument("--normalize", choices=("none", "cp10k-log1p"), default="cp10k-log1p")
     train.add_argument("--max-steps", type=int, default=None)
+    train.add_argument("--batch-size", type=int, default=None)
+    train.add_argument("--set-size", type=int, default=None)
+    train.add_argument("--learning-rate", type=float, default=None)
+    train.add_argument("--weight-decay", type=float, default=None)
+    train.add_argument("--device", default=None)
+    _add_prior_args(train)
 
     predict = sub.add_parser("predict")
     predict.add_argument("--checkpoint", required=True)
@@ -31,6 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--perturbation", required=True)
     predict.add_argument("--output", required=True)
     predict.add_argument("--seed", type=int, default=0)
+    _add_prior_args(predict)
 
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--truth", required=True)
@@ -53,10 +80,29 @@ def main(argv: list[str] | None = None) -> int:
         adata.write_h5ad(output)
         return 0
     if args.command == "train":
-        train_tiny(args.adata, args.output, max_steps=args.max_steps)
+        train_model(
+            args.adata,
+            args.output,
+            model_size=args.model_size,
+            max_steps=args.max_steps,
+            batch_size=args.batch_size,
+            set_size=args.set_size,
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
+            device=args.device,
+            normalize=args.normalize,
+            prior_files=_prior_files_from_args(args),
+        )
         return 0
     if args.command == "predict":
-        predict_adata(args.checkpoint, args.adata, args.perturbation, args.output, seed=args.seed)
+        predict_adata(
+            args.checkpoint,
+            args.adata,
+            args.perturbation,
+            args.output,
+            seed=args.seed,
+            prior_files=_prior_files_from_args(args),
+        )
         return 0
     if args.command == "evaluate":
         evaluate_prediction_files(args.truth, args.pred, args.output)

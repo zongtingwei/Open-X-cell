@@ -44,7 +44,8 @@ def make_synthetic_adata(
             "context": ["synthetic"] * n_cells,
             "batch": ["batch0"] * n_cells,
             "is_control": [label == "control" for label in perturbations],
-        }
+        },
+        index=[f"cell_{idx}" for idx in range(n_cells)],
     )
     var = pd.DataFrame(index=gene_names)
     return AnnData(X=x, obs=obs, var=var)

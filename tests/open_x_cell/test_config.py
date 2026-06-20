@@ -49,3 +49,4 @@ def test_training_config_defaults_are_local_smoke_safe():
     assert cfg.set_size == 8
     assert cfg.learning_rate == 1e-3
     assert cfg.max_steps == 10
+    assert cfg.weight_decay == 0.01

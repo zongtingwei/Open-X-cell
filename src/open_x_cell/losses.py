@@ -66,6 +66,8 @@ class OpenXCellLoss(nn.Module):
         target_cell_embedding: torch.Tensor | None = None,
         prior_reconstructions: dict[str, torch.Tensor] | None = None,
         prior_values: dict[str, torch.Tensor] | None = None,
+        prior_missing: torch.Tensor | None = None,
+        prior_source_names: tuple[str, ...] | None = None,
     ) -> LossOutput:
         terms: dict[str, torch.Tensor] = {}
         pred_delta = fold_change(prediction, control)
@@ -85,7 +87,16 @@ class OpenXCellLoss(nn.Module):
             prior_losses = []
             for source, reconstruction in prior_reconstructions.items():
                 if source in prior_values:
-                    prior_losses.append(F.mse_loss(reconstruction, prior_values[source]))
+                    if prior_missing is not None:
+                        source_names = prior_source_names or tuple(prior_reconstructions)
+                        if source not in source_names:
+                            continue
+                        keep = ~prior_missing[:, source_names.index(source)]
+                        if not torch.any(keep):
+                            continue
+                        prior_losses.append(F.mse_loss(reconstruction[keep], prior_values[source][keep]))
+                    else:
+                        prior_losses.append(F.mse_loss(reconstruction, prior_values[source]))
             if prior_losses:
                 terms["prior_reconstruction"] = torch.stack(prior_losses).mean()
 
