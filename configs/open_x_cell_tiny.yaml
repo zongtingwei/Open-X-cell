@@ -1,0 +1,6 @@
+model: tiny
+batch_size: 2
+set_size: 8
+max_steps: 4
+learning_rate: 0.001
+context_length: 16

@@ -12,7 +12,10 @@ build/
 checkpoints/
 outputs/
 data/
+runs/
+*.pt
+*.pth
+*.ckpt
 .env
 .venv/
 venv/
-

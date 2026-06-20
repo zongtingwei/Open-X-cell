@@ -1,11 +1,14 @@
 [project]
-name = "lingshu-cell-reproduction"
+name = "open-x-cell"
 version = "0.1.0"
-description = "Paper-level runnable reproduction of Lingshu-Cell."
+description = "Clean-room runnable reproduction of X-Cell as Open-X-Cell."
 requires-python = ">=3.10"
 dependencies = [
   "numpy>=1.24",
   "torch>=2.0",
+  "anndata",
+  "pandas",
+  "scipy",
 ]
 
 [project.optional-dependencies]
@@ -22,7 +25,13 @@ dev = [
   "pytest",
 ]
 
+[project.scripts]
+open-x-cell = "open_x_cell.cli:main"
+
+[tool.setuptools.packages.find]
+where = [".", "src"]
+include = ["lingshu_cell*", "open_x_cell*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["."]
-
+pythonpath = [".", "src"]
