@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import torch
 from anndata import AnnData
 
 from open_x_cell.data import OpenXCellDataset, normalize_cp10k_log1p
@@ -78,3 +79,56 @@ def test_dataset_falls_back_to_context_controls_when_batch_controls_are_missing(
     assert sample.batch == "batch1"
     assert set(adata.obs.iloc[sample.control_indices]["context"]) == {"ctxA"}
     assert set(adata.obs.iloc[sample.control_indices]["batch"]) == {"batch0"}
+
+
+def test_deterministic_set_construction_chunks_and_discards_incomplete():
+    # GENE_1 has 5 target cells, set_size=2 -> 2 complete sets (1 discarded)
+    obs = pd.DataFrame(
+        {
+            "perturbation": ["control", "control", "control"] + ["GENE_1"] * 5,
+            "context": ["c"] * 8,
+            "batch": ["b"] * 8,
+            "is_control": [True, True, True, False, False, False, False, False],
+        },
+        index=[f"cell_{i}" for i in range(8)],
+    )
+    var = pd.DataFrame(index=["GENE_0", "GENE_1", "GENE_2"])
+    adata = AnnData(X=np.arange(24, dtype=np.float32).reshape(8, 3), obs=obs, var=var)
+    ds = OpenXCellDataset(adata, set_size=2, context_length=3, seed=0)
+    assert len(ds) == 2  # 5 // 2 = 2 complete sets, remainder discarded
+    for i in range(len(ds)):
+        s = ds[i]
+        assert s.x_target.shape == (2, 3) and s.x_control.shape == (2, 3)
+    # target cells across the two sets are disjoint (chunked, not resampled)
+    used = set(ds[0].target_indices.tolist()) | set(ds[1].target_indices.tolist())
+    assert len(used) == 4  # 2 sets * 2 cells, all distinct
+
+
+def test_set_construction_is_deterministic_across_instances():
+    adata = make_synthetic_adata(n_cells=96, n_genes=24, n_perturbations=4, seed=2)
+    a = OpenXCellDataset(adata, set_size=4, context_length=12, seed=7)
+    b = OpenXCellDataset(adata, set_size=4, context_length=12, seed=7)
+    assert len(a) == len(b)
+    s0, s1 = a[0], b[0]
+    np.testing.assert_array_equal(s0.target_indices, s1.target_indices)
+    np.testing.assert_array_equal(s0.control_indices, s1.control_indices)
+    assert torch.equal(s0.x_target, s1.x_target)
+
+
+def test_control_set_replicates_when_pool_smaller_than_set_size():
+    # one control cell, set_size 4 -> replicated to fill
+    obs = pd.DataFrame(
+        {
+            "perturbation": ["control"] + ["GENE_1"] * 4,
+            "context": ["c"] * 5,
+            "batch": ["b"] * 5,
+            "is_control": [True, False, False, False, False],
+        },
+        index=[f"cell_{i}" for i in range(5)],
+    )
+    var = pd.DataFrame(index=["GENE_0", "GENE_1"])
+    adata = AnnData(X=np.arange(10, dtype=np.float32).reshape(5, 2), obs=obs, var=var)
+    ds = OpenXCellDataset(adata, set_size=4, context_length=2, seed=0)
+    s = ds[0]
+    assert s.x_control.shape == (4, 2)
+    assert set(s.control_indices.tolist()) == {0}  # all replicated from the single control

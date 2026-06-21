@@ -16,15 +16,20 @@ The implemented local workflow includes:
 - A Transformer model with RMSNorm/QK-Norm/SwiGLU/tied-output support.
 - X-Cell-style objective terms, including contrastive target-cell embedding and
   prior reconstruction terms when the required targets are available.
+- scGPT warm-start (`--scgpt-warm-start`): initializes the gene embedding, value
+  encoder, and transformer blocks from a pretrained scGPT checkpoint, with
+  Ensembl→symbol mapping, an overlap check (`--scgpt-min-overlap`, optionally
+  hard-failing via `--scgpt-strict-overlap`), and `<pad>` fallback.
 - CP10k/log1p AnnData preprocessing and set construction stratified by
   `(context, perturbation, batch)` with context-level NTC fallback.
 - Synthetic AnnData generation.
-- Training, prediction, and evaluation CLI commands with `tiny`, `mini`, and
-  `ultra` model-size selection.
+- Training, prediction, and evaluation CLI commands (including `evaluate-batch`
+  for cross-perturbation Centroid Accuracy) with `tiny`/`mini`/`ultra` sizes.
 
-Deliberate clean-room boundaries: this repository does not ship unpublished
-Xaira weights, scGPT warm-start checkpoints, FSDP2 orchestration, large-cluster
-activation checkpointing, or the original production vocabulary remap tables.
+Deliberate clean-room boundaries: this repository implements scGPT warm-start but
+does **not** ship pretrained scGPT/Xaira weights or the original production
+vocabulary remap tables (bring your own scGPT checkpoint dir), nor does it ship
+FSDP2 orchestration or large-cluster activation checkpointing.
 
 Run tests for the Open-X-Cell package:
 

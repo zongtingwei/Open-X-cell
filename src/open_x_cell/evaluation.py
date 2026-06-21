@@ -97,6 +97,52 @@ def evaluate_prediction_files(truth_path: str | Path, pred_path: str | Path, out
     return metrics
 
 
+def _aligned_delta(truth: AnnData, pred: AnnData) -> tuple[str, torch.Tensor, torch.Tensor]:
+    """Return (perturbation, pred_delta, true_delta) over genes shared by both."""
+    perturbation = str(pred.obs["perturbation"].iloc[0]) if "perturbation" in pred.obs else "unknown"
+    truth_var = {name: idx for idx, name in enumerate(truth.var_names)}
+    pred_idx, truth_idx = [], []
+    for pi, name in enumerate(pred.var_names):
+        if name in truth_var:
+            pred_idx.append(pi)
+            truth_idx.append(truth_var[name])
+    truth_x = truth.X.toarray() if hasattr(truth.X, "toarray") else truth.X
+    pred_x = pred.X.toarray() if hasattr(pred.X, "toarray") else pred.X
+    target_mask = truth.obs["perturbation"].astype(str).to_numpy() == perturbation
+    control_mask = truth.obs["is_control"].to_numpy(dtype=bool)
+    ctrl_mean = _as_tensor(truth_x[control_mask][:, truth_idx]).mean(0)
+    pred_delta = _as_tensor(pred_x[:, pred_idx]).mean(0) - ctrl_mean
+    true_delta = _as_tensor(truth_x[target_mask][:, truth_idx]).mean(0) - ctrl_mean
+    return perturbation, pred_delta, true_delta
+
+
+def evaluate_batch(truth_path: str | Path, pred_paths: list[str | Path],
+                   output_path: str | Path | None = None) -> dict:
+    """Evaluate many single-perturbation predictions against one truth AnnData.
+
+    Returns per-perturbation metrics, their means, and cross-perturbation
+    Centroid Accuracy (nearest true centroid by predicted delta).
+    """
+    truth = read_h5ad(truth_path)
+    per_pert: dict[str, dict[str, float]] = {}
+    pred_centroids: dict[str, torch.Tensor] = {}
+    true_centroids: dict[str, torch.Tensor] = {}
+    for path in pred_paths:
+        pred = read_h5ad(path)
+        per_pert[str(pred.obs["perturbation"].iloc[0])] = evaluate_prediction_adata(truth, pred)
+        name, pd_delta, td_delta = _aligned_delta(truth, pred)
+        pred_centroids[name], true_centroids[name] = pd_delta, td_delta
+    keys = next(iter(per_pert.values())).keys() if per_pert else []
+    summary = {k: float(sum(m[k] for m in per_pert.values()) / len(per_pert)) for k in keys}
+    summary.update(centroid_accuracy(pred_centroids, true_centroids))
+    result = {"summary": summary, "per_perturbation": per_pert}
+    if output_path is not None:
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(result, indent=2, sort_keys=True))
+    return result
+
+
 def evaluate_prediction_adata(truth: AnnData, pred: AnnData) -> dict[str, float]:
     perturbation = str(pred.obs["perturbation"].iloc[0]) if "perturbation" in pred.obs else "unknown"
     truth_var = {name: idx for idx, name in enumerate(truth.var_names)}

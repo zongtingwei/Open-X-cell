@@ -4,10 +4,10 @@ import argparse
 from pathlib import Path
 
 from open_x_cell.config import LossConfig
-from open_x_cell.evaluation import evaluate_prediction_files
+from open_x_cell.evaluation import evaluate_batch, evaluate_prediction_files
 from open_x_cell.inference import predict_adata
 from open_x_cell.synthetic import make_synthetic_adata
-from open_x_cell.training import train_model
+from open_x_cell.training import train_model, train_model_curriculum
 
 
 def _add_prior_args(parser: argparse.ArgumentParser) -> None:
@@ -60,6 +60,16 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Path to an Ensembl->symbol mapping (.pt) used by scGPT warm-start.")
     train.add_argument("--scgpt-min-overlap", type=float, default=0.95,
                        help="Minimum gene-vocab overlap for scGPT warm-start (warns below).")
+    train.add_argument("--scgpt-strict-overlap", action="store_true",
+                       help="Fail (instead of warn) when scGPT gene overlap is below --scgpt-min-overlap.")
+    train.add_argument("--curriculum", action="store_true",
+                       help="Two-phase curriculum: Phase 1 on all perturbations, Phase 2 on the "
+                            "top --top-frac high-effect perturbations with a fresh optimizer.")
+    train.add_argument("--phase1-steps", type=int, default=None)
+    train.add_argument("--phase2-steps", type=int, default=None)
+    train.add_argument("--top-frac", type=float, default=0.05)
+    train.add_argument("--phase2-lr", type=float, default=None)
+    train.add_argument("--phase2-warmup", type=float, default=None)
     train.add_argument("--l1-output", type=float, default=None,
                        help="Weight of the L1 output regularization term (paper: Mini=1.0).")
     _add_prior_args(train)
@@ -72,12 +82,29 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--seed", type=int, default=0)
     predict.add_argument("--n-cells", type=int, default=64,
                          help="Control cells sampled per prediction set (paper default 64).")
+    predict.add_argument("--context", default=None,
+                         help="Target context: sample NTC controls from this context only.")
+    predict.add_argument("--batch", default=None,
+                         help="Target batch: further restrict NTC controls to this batch.")
+    predict.add_argument("--n-sets", type=int, default=1,
+                         help="Number of control sets to ensemble (averages NTC sampling noise).")
+    predict.add_argument("--tta", action="store_true",
+                         help="Test-time adaptation: MMD-only self-supervised adaptation on the "
+                              "target NTC (cross-attention frozen) before predicting.")
+    predict.add_argument("--tta-steps", type=int, default=50)
+    predict.add_argument("--tta-lr", type=float, default=1e-4)
     _add_prior_args(predict)
 
     evaluate = sub.add_parser("evaluate")
     evaluate.add_argument("--truth", required=True)
     evaluate.add_argument("--pred", required=True)
     evaluate.add_argument("--output", required=True)
+
+    evaluate_batch = sub.add_parser("evaluate-batch")
+    evaluate_batch.add_argument("--truth", required=True)
+    evaluate_batch.add_argument("--pred", required=True, nargs="+",
+                                help="One or more per-perturbation prediction h5ad files.")
+    evaluate_batch.add_argument("--output", required=True)
     return parser
 
 
@@ -96,6 +123,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "train":
         loss_weights = LossConfig(l1_output=args.l1_output) if args.l1_output is not None else None
+        if args.curriculum:
+            train_model_curriculum(
+                args.adata, args.output, model_size=args.model_size,
+                phase1_steps=args.phase1_steps if args.phase1_steps is not None else (args.max_steps or 100),
+                phase2_steps=args.phase2_steps if args.phase2_steps is not None else (args.max_steps or 100),
+                top_frac=args.top_frac, phase2_learning_rate=args.phase2_lr,
+                phase2_warmup_fraction=args.phase2_warmup, normalize=args.normalize,
+                prior_files=_prior_files_from_args(args), device=args.device,
+                scgpt_init=args.scgpt_init, scgpt_warm_start=args.scgpt_warm_start,
+                gene_id_map=args.gene_id_map, scgpt_min_overlap=args.scgpt_min_overlap,
+                scgpt_strict_overlap=args.scgpt_strict_overlap, loss_weights=loss_weights,
+            )
+            return 0
         train_model(
             args.adata,
             args.output,
@@ -112,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
             scgpt_warm_start=args.scgpt_warm_start,
             gene_id_map=args.gene_id_map,
             scgpt_min_overlap=args.scgpt_min_overlap,
+            scgpt_strict_overlap=args.scgpt_strict_overlap,
             loss_weights=loss_weights,
         )
         return 0
@@ -124,10 +165,19 @@ def main(argv: list[str] | None = None) -> int:
             seed=args.seed,
             prior_files=_prior_files_from_args(args),
             n_cells=args.n_cells,
+            context=args.context,
+            batch=args.batch,
+            n_sets=args.n_sets,
+            tta=args.tta,
+            tta_steps=args.tta_steps,
+            tta_lr=args.tta_lr,
         )
         return 0
     if args.command == "evaluate":
         evaluate_prediction_files(args.truth, args.pred, args.output)
+        return 0
+    if args.command == "evaluate-batch":
+        evaluate_batch(args.truth, args.pred, args.output)
         return 0
     raise AssertionError(f"unhandled command {args.command}")
 

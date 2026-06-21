@@ -104,6 +104,7 @@ class OpenXCellDataset(torch.utils.data.Dataset[OpenXCellSample]):
         self.matrix = dense_matrix(adata)
         self.set_size = set_size
         self.context_length = min(context_length, adata.n_vars)
+        self.seed = seed
         self.rng = np.random.default_rng(seed)
         self.gene_to_id = {name: idx for idx, name in enumerate(adata.var_names)}
         self.control_indices = np.flatnonzero(adata.obs[control_key].to_numpy(dtype=bool))
@@ -156,38 +157,61 @@ class OpenXCellDataset(torch.utils.data.Dataset[OpenXCellSample]):
                     )
         if not self.samples:
             raise ValueError("dataset requires at least one perturbation")
+        self._build_set_index()
+
+    def _control_set(self, pool: np.ndarray) -> np.ndarray:
+        """A control set of exactly set_size cells; whole-set replicate (wrap) when short."""
+        if len(pool) >= self.set_size:
+            return pool[self.rng.permutation(len(pool))[: self.set_size]]
+        reps = int(np.ceil(self.set_size / len(pool)))
+        return np.tile(pool, reps)[: self.set_size]
+
+    def _build_set_index(self) -> None:
+        """Deterministic set construction (paper A.10.1): permute target cells, chunk
+        into complete sets of set_size, discard the incomplete remainder; pair each
+        with a context/batch-matched control set (NTC whole-sets replicated if short).
+
+        If no group yields a complete target set (tiny data), fall back to one
+        replicated set per group so the dataset is never empty.
+        """
+        self.set_index: list[tuple[int, np.ndarray, np.ndarray]] = []
+        for gi, group in enumerate(self.samples):
+            tgt = group.target_indices[self.rng.permutation(len(group.target_indices))]
+            n_sets = len(tgt) // self.set_size
+            for s in range(n_sets):
+                target_set = tgt[s * self.set_size : (s + 1) * self.set_size]
+                self.set_index.append((gi, target_set, self._control_set(group.control_indices)))
+        if not self.set_index:
+            for gi, group in enumerate(self.samples):
+                reps = int(np.ceil(self.set_size / len(group.target_indices)))
+                target_set = np.tile(group.target_indices, reps)[: self.set_size]
+                self.set_index.append((gi, target_set, self._control_set(group.control_indices)))
 
     def __len__(self) -> int:
-        return len(self.samples)
+        return len(self.set_index)
 
-    def _choose(self, indices: np.ndarray) -> np.ndarray:
-        replace = len(indices) < self.set_size
-        return self.rng.choice(indices, size=self.set_size, replace=replace)
-
-    def _gene_ids_for(self, perturbation: str) -> np.ndarray:
-        all_ids = np.arange(self.adata.n_vars)
+    def _gene_ids_for(self, perturbation: str, index: int) -> np.ndarray:
         if self.context_length == self.adata.n_vars:
-            selected = all_ids
+            selected = np.arange(self.adata.n_vars)
         else:
-            selected = self.rng.choice(all_ids, size=self.context_length, replace=False)
+            # deterministic per-set context subsample
+            rng = np.random.default_rng(self.seed + index)
+            selected = rng.choice(self.adata.n_vars, size=self.context_length, replace=False)
         if perturbation in self.gene_to_id:
-            pert_id = self.gene_to_id[perturbation]
             selected = selected.copy()
-            selected[0] = pert_id
+            selected[0] = self.gene_to_id[perturbation]
         return selected.astype(np.int64)
 
     def __getitem__(self, index: int) -> OpenXCellSample:
-        group = self.samples[index % len(self.samples)]
+        group_idx, target_rows, control_rows = self.set_index[index % len(self.set_index)]
+        group = self.samples[group_idx]
         perturbation = group.perturbation
-        gene_ids = self._gene_ids_for(perturbation)
-        control_rows = self._choose(group.control_indices)
-        target_rows = self._choose(group.target_indices)
-        perturbation_id = self.gene_to_id.get(perturbation, 0)
+        gene_ids = self._gene_ids_for(perturbation, index)
         return OpenXCellSample(
             x_control=torch.from_numpy(self.matrix[control_rows][:, gene_ids]),
             x_target=torch.from_numpy(self.matrix[target_rows][:, gene_ids]),
             gene_ids=torch.from_numpy(gene_ids),
-            perturbation_id=perturbation_id,
+            perturbation_id=self.gene_to_id.get(perturbation, 0),
             perturbation=perturbation,
             context=group.context,
             batch=group.batch,

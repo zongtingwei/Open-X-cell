@@ -4,6 +4,7 @@ import math
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -131,6 +132,62 @@ def compute_batch_loss(
     )
 
 
+def _apply_scgpt(model, var_names, scgpt_init, scgpt_warm_start, gene_id_map,
+                 min_overlap, strict_overlap) -> None:
+    if scgpt_warm_start is not None:
+        from open_x_cell.scgpt import warm_start_from_scgpt
+        ens2sym = torch.load(gene_id_map, map_location="cpu") if gene_id_map is not None else None
+        stats = warm_start_from_scgpt(
+            model, var_names, scgpt_warm_start, ens2sym=ens2sym,
+            min_overlap=min_overlap, strict_overlap=strict_overlap,
+        )
+        print(f"scGPT warm-start: mapped {stats.n_mapped}/{stats.n_genes} "
+              f"({stats.overlap:.1%}; symbol={stats.n_via_symbol}, ensembl={stats.n_via_ensembl}, "
+              f"fallback={stats.n_fallback}); transformer tensors loaded={stats.loaded_tensors}")
+        for note in stats.notes:
+            print(f"  note: {note}")
+    elif scgpt_init is not None:
+        table = load_gene_embedding_table(scgpt_init)
+        n_init, n_total = init_gene_embedding_from_table(model, var_names, table)
+        print(f"scGPT init: {n_init}/{n_total} gene embeddings initialized from {scgpt_init}")
+
+
+def _run_loop(
+    model, loader, model_cfg, prior_store, loss_fn, train_cfg,
+    *, max_steps: int, learning_rate: float, warmup_fraction: float,
+) -> list[dict[str, float]]:
+    """A single AdamW + warmup-cosine training loop; returns per-step loss history."""
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=learning_rate,
+        betas=(train_cfg.beta1, train_cfg.beta2), weight_decay=train_cfg.weight_decay,
+    )
+    warmup_steps = int(max_steps * warmup_fraction)
+    scheduler = make_warmup_cosine_scheduler(optimizer, warmup_steps=warmup_steps, total_steps=max_steps)
+    iterator = iter(loader)
+    history: list[dict[str, float]] = []
+    for step in range(max_steps):
+        try:
+            batch = next(iterator)
+        except StopIteration:
+            iterator = iter(loader)
+            batch = next(iterator)
+        loss_output = compute_batch_loss(
+            model=model, batch=batch, model_config=model_cfg, loss_fn=loss_fn,
+            prior_store=prior_store, step=step, seed=train_cfg.seed, device=train_cfg.device,
+        )
+        loss = loss_output.total
+        if not torch.isfinite(loss):
+            raise RuntimeError("non-finite loss during training")
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip_norm)
+        optimizer.step()
+        scheduler.step()
+        history.append({name: float(value.detach().cpu()) for name, value in loss_output.terms.items()})
+        history[-1]["total"] = float(loss.detach().cpu())
+    return history
+
+
 def _training_config_with_overrides(
     training_config: TrainingConfig | None,
     max_steps: int | None,
@@ -174,6 +231,7 @@ def train_model(
     scgpt_warm_start: str | Path | None = None,
     gene_id_map: str | Path | None = None,
     scgpt_min_overlap: float = 0.95,
+    scgpt_strict_overlap: bool = False,
     loss_weights: "LossConfig | None" = None,
 ) -> TrainingResult:
     train_cfg = _training_config_with_overrides(
@@ -203,60 +261,103 @@ def train_model(
     )
     loader = DataLoader(dataset, batch_size=train_cfg.batch_size, shuffle=True, collate_fn=collate_samples)
     model = OpenXCellModel(model_cfg).to(train_cfg.device)
-    if scgpt_warm_start is not None:
-        from open_x_cell.scgpt import warm_start_from_scgpt
-        ens2sym = torch.load(gene_id_map, map_location="cpu") if gene_id_map is not None else None
-        stats = warm_start_from_scgpt(
-            model, list(adata.var_names), scgpt_warm_start,
-            ens2sym=ens2sym, min_overlap=scgpt_min_overlap,
-        )
-        print(f"scGPT warm-start: mapped {stats.n_mapped}/{stats.n_genes} "
-              f"({stats.overlap:.1%}; symbol={stats.n_via_symbol}, ensembl={stats.n_via_ensembl}, "
-              f"fallback={stats.n_fallback}); transformer tensors loaded={stats.loaded_tensors}")
-        for note in stats.notes:
-            print(f"  note: {note}")
-    elif scgpt_init is not None:
-        table = load_gene_embedding_table(scgpt_init)
-        n_init, n_total = init_gene_embedding_from_table(model, list(adata.var_names), table)
-        print(f"scGPT init: {n_init}/{n_total} gene embeddings initialized from {scgpt_init}")
-    optimizer = torch.optim.AdamW(
-        model.parameters(),
-        lr=train_cfg.learning_rate,
-        betas=(train_cfg.beta1, train_cfg.beta2),
-        weight_decay=train_cfg.weight_decay,
-    )
-    warmup_steps = int(train_cfg.max_steps * train_cfg.warmup_fraction)
-    scheduler = make_warmup_cosine_scheduler(optimizer, warmup_steps=warmup_steps, total_steps=train_cfg.max_steps)
+    _apply_scgpt(model, list(adata.var_names), scgpt_init, scgpt_warm_start,
+                 gene_id_map, scgpt_min_overlap, scgpt_strict_overlap)
     loss_fn = OpenXCellLoss(loss_weights)
     prior_store = PriorStore.from_files(prior_files or {}, model_cfg)
-    iterator = iter(loader)
-    history: list[dict[str, float]] = []
-    for step in range(train_cfg.max_steps):
-        try:
-            batch = next(iterator)
-        except StopIteration:
-            iterator = iter(loader)
-            batch = next(iterator)
-        loss_output = compute_batch_loss(
-            model=model,
-            batch=batch,
-            model_config=model_cfg,
-            loss_fn=loss_fn,
-            prior_store=prior_store,
-            step=step,
-            seed=train_cfg.seed,
-            device=train_cfg.device,
-        )
-        loss = loss_output.total
-        if not torch.isfinite(loss):
-            raise RuntimeError("non-finite loss during training")
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), train_cfg.grad_clip_norm)
-        optimizer.step()
-        scheduler.step()
-        history.append({name: float(value.detach().cpu()) for name, value in loss_output.terms.items()})
-        history[-1]["total"] = float(loss.detach().cpu())
+    history = _run_loop(
+        model, loader, model_cfg, prior_store, loss_fn, train_cfg,
+        max_steps=train_cfg.max_steps, learning_rate=train_cfg.learning_rate,
+        warmup_fraction=train_cfg.warmup_fraction,
+    )
+    checkpoint = Path(output_dir) / "checkpoint.pt"
+    save_checkpoint(checkpoint, model, model_cfg, list(adata.var_names))
+    return TrainingResult(checkpoint=checkpoint, history=history)
+
+
+def high_effect_perturbations(adata, top_frac: float = 0.05) -> list[str]:
+    """Perturbations with the largest pseudobulk effect ||mean_pert - mean_control||.
+
+    Returns the top ``top_frac`` fraction (at least one) by descending effect size.
+    """
+    from open_x_cell.data import dense_matrix
+
+    matrix = dense_matrix(adata)
+    labels = adata.obs["perturbation"].astype(str).to_numpy()
+    control_key = "is_control"
+    control_mean = matrix[adata.obs[control_key].to_numpy(dtype=bool)].mean(axis=0)
+    perts = [p for p in sorted(set(labels)) if p != "control"]
+    effects = {p: float(np.linalg.norm(matrix[labels == p].mean(axis=0) - control_mean)) for p in perts}
+    ordered = sorted(perts, key=lambda p: effects[p], reverse=True)
+    k = max(1, int(round(top_frac * len(ordered))))
+    return ordered[:k]
+
+
+def train_model_curriculum(
+    adata_path: str | Path,
+    output_dir: str | Path,
+    model_size: str = "tiny",
+    phase1_steps: int = 100,
+    phase2_steps: int = 100,
+    top_frac: float = 0.05,
+    phase2_learning_rate: float | None = None,
+    phase2_warmup_fraction: float | None = None,
+    training_config: TrainingConfig | None = None,
+    normalize: str = "cp10k-log1p",
+    prior_files: dict[str, str | Path | None] | None = None,
+    device: str | None = None,
+    scgpt_init: str | Path | None = None,
+    scgpt_warm_start: str | Path | None = None,
+    gene_id_map: str | Path | None = None,
+    scgpt_min_overlap: float = 0.95,
+    scgpt_strict_overlap: bool = False,
+    loss_weights: "LossConfig | None" = None,
+) -> TrainingResult:
+    """Two-phase curriculum (paper Ultra): Phase 1 trains on all perturbations; then
+    the top ``top_frac`` high-effect perturbations are selected and Phase 2 continues
+    with a FRESH optimizer (and its own LR / warmup) on that subset only.
+    """
+    train_cfg = _training_config_with_overrides(training_config, max_steps=None, device=device)
+    torch.manual_seed(train_cfg.seed)
+    adata = load_adata(str(adata_path), normalize=normalize)
+    model_cfg = model_config(model_size)
+    if adata.n_vars < model_cfg.context_length:
+        raise ValueError(f"{model_size} requires at least {model_cfg.context_length} genes; got {adata.n_vars}.")
+    if adata.n_vars > model_cfg.num_genes:
+        adata = adata[:, : model_cfg.num_genes].copy()
+
+    model = OpenXCellModel(model_cfg).to(train_cfg.device)
+    _apply_scgpt(model, list(adata.var_names), scgpt_init, scgpt_warm_start,
+                 gene_id_map, scgpt_min_overlap, scgpt_strict_overlap)
+    loss_fn = OpenXCellLoss(loss_weights)
+    prior_store = PriorStore.from_files(prior_files or {}, model_cfg)
+
+    def _loader(ad):
+        ds = OpenXCellDataset(ad, set_size=train_cfg.set_size,
+                              context_length=model_cfg.context_length, seed=train_cfg.seed)
+        return DataLoader(ds, batch_size=train_cfg.batch_size, shuffle=True, collate_fn=collate_samples)
+
+    # Phase 1: all perturbations
+    history = _run_loop(model, _loader(adata), model_cfg, prior_store, loss_fn, train_cfg,
+                        max_steps=phase1_steps, learning_rate=train_cfg.learning_rate,
+                        warmup_fraction=train_cfg.warmup_fraction)
+
+    # Select high-effect perturbations, restrict to them + controls for Phase 2
+    selected = high_effect_perturbations(adata, top_frac=top_frac)
+    labels = adata.obs["perturbation"].astype(str).to_numpy()
+    keep = adata.obs["is_control"].to_numpy(dtype=bool) | np.isin(labels, selected)
+    adata2 = adata[keep].copy()
+    print(f"curriculum: phase 2 on {len(selected)} high-effect perturbations "
+          f"(top {top_frac:.0%}): {selected}")
+
+    # Phase 2: fresh optimizer (new LR / warmup) on the high-effect subset
+    history += _run_loop(
+        model, _loader(adata2), model_cfg, prior_store, loss_fn, train_cfg,
+        max_steps=phase2_steps,
+        learning_rate=phase2_learning_rate if phase2_learning_rate is not None else train_cfg.learning_rate,
+        warmup_fraction=phase2_warmup_fraction if phase2_warmup_fraction is not None else train_cfg.warmup_fraction,
+    )
+
     checkpoint = Path(output_dir) / "checkpoint.pt"
     save_checkpoint(checkpoint, model, model_cfg, list(adata.var_names))
     return TrainingResult(checkpoint=checkpoint, history=history)
