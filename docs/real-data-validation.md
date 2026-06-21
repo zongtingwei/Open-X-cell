@@ -1,0 +1,115 @@
+# Open-X-Cell 真实数据验证测试
+
+端到端验证 Open-X-Cell 在**真实** perturb-seq 数据(HepG2 Nadig CRISPRi)上的训练 + 预测 + 评估全流程。脚本走的是项目自身的 `data / model / losses / inference / evaluation` 代码路径,而非合成数据自测,因此能反映真实表现。
+
+## 数据
+
+| 项 | 值 |
+|---|---|
+| 来源 | `vcc_benchmarks/datasets/hepg2nadig.h5ad`(X-Atlas/Pisces 风格,HepG2 CRISPRi) |
+| 子集 | `data/real/hepg2nadig_subset.h5ad` |
+| 形状 | 3900 cells × 400 genes |
+| 扰动数 | 12 个真实靶基因(ENSG),各 200 cells |
+| 对照 | 1500 个 non-targeting cells(`is_control=True`) |
+| 基因 panel | 12 个被扰动基因 + 按 `mean-1` 表达量排序的高表达基因,共 400 |
+| obs schema | `perturbation` / `context=hepg2` / `batch=batch0` / `is_control` |
+
+**复现子集:** `python scripts/prep_real_subset.py`(需要源 h5ad 在上述路径)。
+
+## 模型与训练配置
+
+由 `scripts/validate_real.py` 定义,对齐 x-cell 论文的生产架构:
+
+| 项 | 值 |
+|---|---|
+| 架构 | SwiGLU + RMSNorm + Pre-LN + QK-Norm + tied-output,无 attention bias |
+| 层数 / hidden / heads / ffn | 4 / 128 / 4 / 256 |
+| cross-attention 层 | (1, 3) |
+| 参数量 | ~3.89 M |
+| context_length / num_genes | 400(= panel 大小) |
+| batch_size / set_size | 4 / 16 |
+| max_steps | 300 |
+| lr / grad_clip / optimizer | 3e-4 / 1.0 / AdamW |
+| device | CPU |
+| seed | 0 |
+
+训练循环:每步按 `diffusion_fractions` 轮换 reveal 比例,`mix_control_target` 构造输入,zero-priors,`OpenXCellLoss`(energy distance/MMD + fold-change CCC + per-gene CCC + delta-norm + delta-MSE)。
+
+## 评估指标
+
+逐扰动用项目的 `predict_adata` + `evaluate_prediction_files`,再对 12 个扰动取均值:
+
+| 指标 | 含义 | 方向 |
+|---|---|---|
+| `mae` | 预测表达 vs 真实的平均绝对误差 | 越低越好 |
+| `pearson_delta` | 预测 Δ(扰动−对照)与真实 Δ 的 Pearson | 越高越好 |
+| `overlap_at_n` | Top-N 差异基因重叠率 | 越高越好 |
+| `direction_match` | 逐基因变化方向(上/下调)一致率 | 越高越好(0.5=随机) |
+| `delta_norm_ratio` | 预测 Δ 范数 / 真实 Δ 范数 | 越接近 1 越好 |
+
+## 运行方式
+
+```bash
+# 环境:eval(torch 2.7.1+cu118),CPU 模式
+ENV=/public2/YouYuning/zongtingwei/zongting_env/miniconda3/envs/eval/bin/python
+cd /public2/YouYuning/zongtingwei/Open-X-Cell
+$ENV scripts/validate_real.py
+```
+
+产物写入 `runs/real_hepg2/`:`checkpoint.pt`、每个扰动的 `pred_<ENSG>.h5ad` + `metrics_<ENSG>.json`、汇总 `summary.json`。
+注:`runs/` 与 `data/` 已被 `.gitignore` 忽略,不进版本库。
+
+> stdout 在重定向到文件时是块缓冲的,训练中途日志可能为空,以 `summary.json` 被更新(mtime 刷新)作为完成信号。
+
+## 结果
+
+### 旧代码基线(commit `5237d7f`,2026-06-20)
+
+备份于 `runs/real_hepg2_oldcode/`。
+
+| 指标 | 均值 |
+|---|---|
+| MAE | 0.5019 |
+| pearson_delta | 0.3159 |
+| overlap_at_n | 0.125 |
+| direction_match | 0.57 |
+| delta_norm_ratio | 0.6879 |
+
+loss:first10 ≈ 126.6 → last10 ≈ 1.92;参数 3.89M。
+逐基因最好 ENSG00000189091(pearson_delta 0.54),最差 ENSG00000104866(0.16)。
+
+### 新代码(commit `5d3467b`,"align training pipeline with x-cell paper",2026-06-21 05:02)
+
+| 指标 | 均值 | vs 旧代码 |
+|---|---|---|
+| MAE | 0.5019 | 一致 |
+| pearson_delta | 0.3159 | 一致 |
+| overlap_at_n | 0.125 | 一致 |
+| direction_match | 0.57 | 一致 |
+| delta_norm_ratio | 0.6879 | 一致 |
+
+loss:first10 ≈ 126.5772 → last10 ≈ 1.9188;参数 3.89M。
+**结果与旧基线逐位相同**(`summary.json` 与 `runs/real_hepg2_oldcode/summary.json` 的 `summary` 和 `per_pert` 完全相等)。
+
+#### 逐扰动明细(新代码)
+
+| 扰动 (ENSG) | pearson_delta | direction | overlap@20 | dnorm_ratio | mae |
+|---|---|---|---|---|---|
+| ENSG00000189091 | 0.539 | 0.67 | 0.10 | 0.57 | 0.588 |
+| ENSG00000204152 | 0.532 | 0.62 | 0.30 | 0.70 | 0.494 |
+| ENSG00000130312 | 0.398 | 0.58 | 0.20 | 0.66 | 0.488 |
+| ENSG00000197265 | 0.386 | 0.61 | 0.15 | 0.55 | 0.554 |
+| ENSG00000035141 | 0.323 | 0.54 | 0.15 | 0.67 | 0.548 |
+| ENSG00000101138 | 0.300 | 0.54 | 0.10 | 0.57 | 0.507 |
+| ENSG00000168827 | 0.283 | 0.57 | 0.10 | 0.68 | 0.489 |
+| ENSG00000258366 | 0.279 | 0.62 | 0.05 | 0.74 | 0.428 |
+| ENSG00000178202 | 0.223 | 0.55 | 0.15 | 0.72 | 0.471 |
+| ENSG00000108064 | 0.195 | 0.54 | 0.10 | 0.90 | 0.454 |
+| ENSG00000168538 | 0.169 | 0.47 | 0.10 | 0.54 | 0.552 |
+| ENSG00000104866 | 0.162 | 0.52 | 0.00 | 0.96 | 0.448 |
+
+## 备注
+
+- **为何新旧结果完全相同:** 该 commit 主要改写库的 `training.py` 训练入口,而 `validate_real.py` 使用自己内联的训练循环,只调用 `data / model / losses / inference / evaluation`。这些路径在 `seed=0` + CPU 确定性下数值轨迹一致,故指标一字不差——即新代码在本真实数据验证链路上与旧代码行为等价。
+- 评估为 CPU 小配置(400 基因 / 300 步),意在跑通真实数据全链路并给方向性指标,非完整规模训练。
+- 整体方向性偏弱:`direction_match` 0.57(0.5=随机)、`overlap_at_n` 0.125、`pearson_delta` 0.32,模型能学到扰动方向但逐基因特异性有限。
