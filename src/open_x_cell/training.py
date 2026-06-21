@@ -279,6 +279,11 @@ def high_effect_perturbations(adata, top_frac: float = 0.05) -> list[str]:
     """Perturbations with the largest pseudobulk effect ||mean_pert - mean_control||.
 
     Returns the top ``top_frac`` fraction (at least one) by descending effect size.
+
+    Note: this is an approximation of the paper's high-effect ranking, which first
+    keeps perturbations with detectable effects (binary classifier, FDR < 0.05) and
+    then ranks by the number of significant LASSO-regression features. We use the
+    pseudobulk L2 delta norm as a dependency-free proxy for effect size.
     """
     from open_x_cell.data import dense_matrix
 
@@ -313,9 +318,13 @@ def train_model_curriculum(
     scgpt_strict_overlap: bool = False,
     loss_weights: "LossConfig | None" = None,
 ) -> TrainingResult:
-    """Two-phase curriculum (paper Ultra): Phase 1 trains on all perturbations; then
-    the top ``top_frac`` high-effect perturbations are selected and Phase 2 continues
-    with a FRESH optimizer (and its own LR / warmup) on that subset only.
+    """Two-phase curriculum (paper Ultra, §4.x):
+
+    * Phase 1 — high-effect initialization: train on the top ``top_frac`` highest-effect
+      perturbations only, keeping all loss terms.
+    * Phase 2 — full corpus: continue on every perturbation with a FRESH optimizer (its
+      own LR / warmup), with the per-gene CCC loss term dropped (paper: full-dataset
+      training removes per-gene CCC).
     """
     train_cfg = _training_config_with_overrides(training_config, max_steps=None, device=device)
     torch.manual_seed(train_cfg.seed)
@@ -337,22 +346,25 @@ def train_model_curriculum(
                               context_length=model_cfg.context_length, seed=train_cfg.seed)
         return DataLoader(ds, batch_size=train_cfg.batch_size, shuffle=True, collate_fn=collate_samples)
 
-    # Phase 1: all perturbations
-    history = _run_loop(model, _loader(adata), model_cfg, prior_store, loss_fn, train_cfg,
-                        max_steps=phase1_steps, learning_rate=train_cfg.learning_rate,
-                        warmup_fraction=train_cfg.warmup_fraction)
-
-    # Select high-effect perturbations, restrict to them + controls for Phase 2
+    # Phase 1 (high-effect initialization): top-`top_frac` high-effect perturbations,
+    # ALL losses (paper: high-effect curriculum keeps every loss term).
     selected = high_effect_perturbations(adata, top_frac=top_frac)
     labels = adata.obs["perturbation"].astype(str).to_numpy()
     keep = adata.obs["is_control"].to_numpy(dtype=bool) | np.isin(labels, selected)
-    adata2 = adata[keep].copy()
-    print(f"curriculum: phase 2 on {len(selected)} high-effect perturbations "
+    adata1 = adata[keep].copy()
+    print(f"curriculum phase 1 (high-effect init): {len(selected)} perturbations "
           f"(top {top_frac:.0%}): {selected}")
+    history = _run_loop(model, _loader(adata1), model_cfg, prior_store, loss_fn, train_cfg,
+                        max_steps=phase1_steps, learning_rate=train_cfg.learning_rate,
+                        warmup_fraction=train_cfg.warmup_fraction)
 
-    # Phase 2: fresh optimizer (new LR / warmup) on the high-effect subset
+    # Phase 2 (full corpus): fresh optimizer (own LR / warmup), per-gene CCC removed
+    # (paper: full-dataset training drops the per-gene CCC term).
+    phase2_weights = replace(loss_weights or LossConfig(), per_gene_ccc=0.0)
+    loss_fn2 = OpenXCellLoss(phase2_weights)
+    print("curriculum phase 2: full corpus (per-gene CCC dropped)")
     history += _run_loop(
-        model, _loader(adata2), model_cfg, prior_store, loss_fn, train_cfg,
+        model, _loader(adata), model_cfg, prior_store, loss_fn2, train_cfg,
         max_steps=phase2_steps,
         learning_rate=phase2_learning_rate if phase2_learning_rate is not None else train_cfg.learning_rate,
         warmup_fraction=phase2_warmup_fraction if phase2_warmup_fraction is not None else train_cfg.warmup_fraction,

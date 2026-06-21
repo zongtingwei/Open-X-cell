@@ -160,6 +160,28 @@ loss:first10 ≈ 132.24 → last10 ≈ 1.8185。
 
 **结论:** 仅补上 scGPT 初始化,真实 HepG2 扰动预测的 **pearson_delta 几乎翻倍、overlap@N 翻倍多**,每一项指标都改善。这证实了之前一致性核对中判定的「最系统性偏差」确实重要——scGPT 初始化对扰动方向性和差异基因选择有实质贡献。
 
+### scGPT 三臂阶梯:随机 → embed-init → full warm-start(2026-06-21)
+
+由 `scripts/validate_mini_scgpt.py` 驱动(`runs/mini_scgpt/comparison3.json`),512-d / 2000 基因 / 6 层 / 500 步,三臂仅初始化方式不同:
+
+- **base** — 随机初始化
+- **embed** — 仅 scGPT gene-embedding 初始化(npz 表)
+- **warmstart** — 完整 warm-start:gene embedding + value encoder + transformer 层(fused Wqkv 拆 q/k/v),98% ENSG 映射、104 张量迁移
+
+| 指标 | base | embed | warmstart | 方向 |
+|---|---|---|---|---|
+| MAE | 0.5274 | **0.5052** | 0.5121 | 越低越好 |
+| pearson_delta | 0.1371 | **0.3396** | 0.3271 | 越高越好 |
+| de_spearman_lfc | 0.1272 | **0.3252** | 0.3024 | 越高越好 |
+| overlap_at_n | 0.0417 | **0.1292** | **0.1292** | 越高越好 |
+| direction_match | 0.5590 | **0.6143** | 0.5964 | 越高越好 |
+| delta_norm_ratio | 0.5912 | **0.6417** | 0.6209 | 越接近 1 |
+| centroid_accuracy | **0.1667** | 0.0833 | 0.0833 | 越高越好 |
+
+训练 loss 起点:base 85.4 → embed 79.5 → warmstart 78.3(warm-start 最低)。
+
+**诚实结论:** 增益**几乎全部来自 gene-embedding 初始化**(embed ≫ base,pearson_delta +148%)。把 scGPT 的 **transformer 层也迁移过来(warmstart)在这个小规模(512-d/2000基因/500步)设置下反而略低于只迁 embedding**——可能原因:scGPT 是 binned-value 掩码建模目标、与 X-Cell 的 set-level diffusion 目标和连续 log1p 值不完全对齐,迁移的 transformer/value-encoder 权重在少步数下不如让其随机起步。`centroid_accuracy` 在 12 扰动上仅 1–2 个命中,噪声大,不作主要依据。论文级 transformer warm-start 的收益可能需完整规模(34 层 / 全语料 / 长训练)才显现。
+
 ## 备注
 
 - **validate_real 内联循环为何与旧基线完全相同:** "align training pipeline" commit 主要改写库的 `training.py` 入口;`validate_real.py` 用自己的内联循环,只调用 `data / model / losses / inference / evaluation`,这些路径在 `seed=0` + CPU 确定性下数值轨迹一致,故指标一字不差。要测到 pipeline 改动须改用 `train_model`(见上)。
