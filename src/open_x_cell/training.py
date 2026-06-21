@@ -7,12 +7,17 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from open_x_cell.config import ModelConfig, TrainingConfig, model_config
+from open_x_cell.config import LossConfig, ModelConfig, TrainingConfig, model_config
 from open_x_cell.data import OpenXCellDataset, collate_samples, load_adata
 from open_x_cell.diffusion import make_reveal_mask, mix_control_target
 from open_x_cell.losses import LossOutput, OpenXCellLoss
 from open_x_cell.model import OpenXCellModel
-from open_x_cell.priors import PriorStore, make_zero_priors
+from open_x_cell.priors import (
+    PriorStore,
+    init_gene_embedding_from_table,
+    load_gene_embedding_table,
+    make_zero_priors,
+)
 
 
 @dataclass(frozen=True)
@@ -90,7 +95,11 @@ def compute_batch_loss(
     x_target = batch.x_target.to(target_device)
     gene_ids = batch.gene_ids.to(target_device)
     perturbation_ids = batch.perturbation_ids.to(target_device)
-    fraction = model_config.diffusion_fractions[step % len(model_config.diffusion_fractions)]
+    # Paper samples the reveal fraction alpha ~ Uniform{0.25,0.5,0.75,1.0} each step
+    # (not a fixed step%len cycle). Seed the draw by step for reproducibility.
+    fractions = model_config.diffusion_fractions
+    draw = torch.randint(len(fractions), (1,), generator=torch.Generator().manual_seed(seed + step))
+    fraction = fractions[int(draw.item())]
     reveal = make_reveal_mask(
         batch_size=x_control.shape[0],
         set_size=x_control.shape[1],
@@ -161,6 +170,8 @@ def train_model(
     learning_rate: float | None = None,
     weight_decay: float | None = None,
     device: str | None = None,
+    scgpt_init: str | Path | None = None,
+    loss_weights: "LossConfig | None" = None,
 ) -> TrainingResult:
     train_cfg = _training_config_with_overrides(
         training_config,
@@ -189,6 +200,10 @@ def train_model(
     )
     loader = DataLoader(dataset, batch_size=train_cfg.batch_size, shuffle=True, collate_fn=collate_samples)
     model = OpenXCellModel(model_cfg).to(train_cfg.device)
+    if scgpt_init is not None:
+        table = load_gene_embedding_table(scgpt_init)
+        n_init, n_total = init_gene_embedding_from_table(model, list(adata.var_names), table)
+        print(f"scGPT init: {n_init}/{n_total} gene embeddings initialized from {scgpt_init}")
     optimizer = torch.optim.AdamW(
         model.parameters(),
         lr=train_cfg.learning_rate,
@@ -197,7 +212,7 @@ def train_model(
     )
     warmup_steps = int(train_cfg.max_steps * train_cfg.warmup_fraction)
     scheduler = make_warmup_cosine_scheduler(optimizer, warmup_steps=warmup_steps, total_steps=train_cfg.max_steps)
-    loss_fn = OpenXCellLoss()
+    loss_fn = OpenXCellLoss(loss_weights)
     prior_store = PriorStore.from_files(prior_files or {}, model_cfg)
     iterator = iter(loader)
     history: list[dict[str, float]] = []

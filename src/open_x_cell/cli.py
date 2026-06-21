@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from open_x_cell.config import LossConfig
 from open_x_cell.evaluation import evaluate_prediction_files
 from open_x_cell.inference import predict_adata
 from open_x_cell.synthetic import make_synthetic_adata
@@ -49,6 +50,11 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--learning-rate", type=float, default=None)
     train.add_argument("--weight-decay", type=float, default=None)
     train.add_argument("--device", default=None)
+    train.add_argument("--scgpt-init", default=None,
+                       help="Path to a gene->embedding table (.npz with genes/embeddings) "
+                            "to initialize gene embeddings from scGPT. Requires hidden_dim to match.")
+    train.add_argument("--l1-output", type=float, default=None,
+                       help="Weight of the L1 output regularization term (paper: Mini=1.0).")
     _add_prior_args(train)
 
     predict = sub.add_parser("predict")
@@ -57,6 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     predict.add_argument("--perturbation", required=True)
     predict.add_argument("--output", required=True)
     predict.add_argument("--seed", type=int, default=0)
+    predict.add_argument("--n-cells", type=int, default=64,
+                         help="Control cells sampled per prediction set (paper default 64).")
     _add_prior_args(predict)
 
     evaluate = sub.add_parser("evaluate")
@@ -80,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         adata.write_h5ad(output)
         return 0
     if args.command == "train":
+        loss_weights = LossConfig(l1_output=args.l1_output) if args.l1_output is not None else None
         train_model(
             args.adata,
             args.output,
@@ -92,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
             device=args.device,
             normalize=args.normalize,
             prior_files=_prior_files_from_args(args),
+            scgpt_init=args.scgpt_init,
+            loss_weights=loss_weights,
         )
         return 0
     if args.command == "predict":
@@ -102,6 +113,7 @@ def main(argv: list[str] | None = None) -> int:
             args.output,
             seed=args.seed,
             prior_files=_prior_files_from_args(args),
+            n_cells=args.n_cells,
         )
         return 0
     if args.command == "evaluate":

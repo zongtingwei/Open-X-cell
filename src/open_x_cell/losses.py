@@ -16,6 +16,9 @@ class LossOutput:
 
 
 def energy_distance(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    # Standard (V-statistic) energy distance: 2 E||X-Y|| - E||X-X'|| - E||Y-Y'||.
+    # This matches geomloss' SamplesLoss("energy") semantics (zero for identical
+    # sets); the diagonal self-distances are zero and harmless.
     if x.dim() != 3 or y.dim() != 3:
         raise ValueError("energy_distance expects [batch, set, features] tensors")
     if x.shape[0] != y.shape[0] or x.shape[2] != y.shape[2]:
@@ -80,6 +83,9 @@ class OpenXCellLoss(nn.Module):
         terms["delta_norm"] = (1.0 - ratio).pow(2).mean()
         terms["delta_mse"] = F.mse_loss(pred_delta, true_delta)
 
+        if self.weights.l1_output:
+            terms["l1_output"] = prediction.abs().mean()
+
         if target_cell_embedding is not None and self.weights.contrastive:
             terms["contrastive"] = info_nce(cell_embedding, target_cell_embedding)
 
@@ -107,6 +113,8 @@ class OpenXCellLoss(nn.Module):
             "delta_norm": self.weights.delta_norm * terms["delta_norm"],
             "delta_mse": self.weights.delta_mse * terms["delta_mse"],
         }
+        if "l1_output" in terms:
+            weighted_terms["l1_output"] = self.weights.l1_output * terms["l1_output"]
         if "contrastive" in terms:
             weighted_terms["contrastive"] = self.weights.contrastive * terms["contrastive"]
         if "prior_reconstruction" in terms:

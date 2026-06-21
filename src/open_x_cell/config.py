@@ -21,6 +21,7 @@ class LossConfig:
     delta_mse: float = 1.0
     contrastive: float = 1.0
     prior_reconstruction: float = 1.0
+    l1_output: float = 0.0  # PaLM-style L1 output regularization (paper: Mini=1.0, Ultra=0)
 
 
 @dataclass(frozen=True)

@@ -67,6 +67,64 @@ def _load_prior_table(path: str | Path, expected_dim: int) -> dict[str, np.ndarr
     return {gene: values[idx].copy() for idx, gene in enumerate(genes)}
 
 
+def load_gene_embedding_table(path: str | Path) -> dict[str, np.ndarray]:
+    """Load a gene -> embedding table (e.g. scGPT gene embeddings) with any width.
+
+    Same on-disk format as priors (`.npz` with 'genes'/'embeddings', or a table
+    file with a gene column), but without enforcing a specific embedding dim.
+    """
+    source = Path(path)
+    if source.suffix.lower() == ".npz":
+        payload = np.load(source, allow_pickle=False)
+        if "genes" not in payload or "embeddings" not in payload:
+            raise ValueError(f"{source} must contain 'genes' and 'embeddings' arrays")
+        genes = payload["genes"].astype(str)
+        values = np.asarray(payload["embeddings"], dtype=np.float32)
+    else:
+        if source.suffix.lower() == ".parquet":
+            frame = pd.read_parquet(source)
+        else:
+            sep = "\t" if source.suffix.lower() in {".tsv", ".txt"} else ","
+            frame = pd.read_csv(source, sep=sep)
+        gene_column = next((n for n in ("gene", "gene_name", "gene_id", "symbol") if n in frame), frame.columns[0])
+        genes = frame[gene_column].astype(str).to_numpy()
+        values = frame.drop(columns=[gene_column]).to_numpy(dtype=np.float32)
+    if values.ndim != 2:
+        raise ValueError(f"{source} must contain a 2D embedding matrix")
+    return {gene: values[idx].copy() for idx, gene in enumerate(genes)}
+
+
+def init_gene_embedding_from_table(
+    model, var_names: list[str], table: dict[str, np.ndarray]
+) -> tuple[int, int]:
+    """Overwrite ``model.gene_embedding`` rows with embeddings from ``table``.
+
+    Row ``i`` corresponds to ``var_names[i]`` (the model indexes the gene embedding
+    by gene position). Genes absent from ``table`` keep their random init. Returns
+    ``(n_initialized, n_total)``. Requires the table width to equal hidden_dim.
+    """
+    weight = model.gene_embedding.weight
+    n_rows, hidden = weight.shape
+    sample = next(iter(table.values()))
+    if sample.shape[0] != hidden:
+        raise ValueError(
+            f"gene embedding table dim {sample.shape[0]} != model hidden_dim {hidden}; "
+            "use a matching architecture (e.g. mini, 512-d) or project the embeddings."
+        )
+    updated = weight.detach().clone()
+    count = 0
+    limit = min(n_rows, len(var_names))
+    for i in range(limit):
+        vector = table.get(str(var_names[i]))
+        if vector is None:
+            continue
+        updated[i] = torch.from_numpy(np.asarray(vector, dtype=np.float32))
+        count += 1
+    with torch.no_grad():
+        weight.copy_(updated.to(weight.device))
+    return count, limit
+
+
 @dataclass(frozen=True)
 class PriorStore:
     embeddings: dict[str, dict[str, np.ndarray]]

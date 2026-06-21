@@ -18,19 +18,23 @@ def predict_adata(
     output_path: str | Path,
     seed: int = 0,
     prior_files: dict[str, str | Path | None] | None = None,
+    n_cells: int = 64,
 ) -> AnnData:
+    if n_cells <= 0:
+        raise ValueError("n_cells must be positive")
     model, config, _ = load_checkpoint(checkpoint_path)
     adata = read_h5ad(adata_path)
     matrix = adata.X.toarray() if hasattr(adata.X, "toarray") else adata.X
     control_mask = adata.obs["is_control"].to_numpy(dtype=bool)
-    control = np.asarray(matrix[control_mask], dtype=np.float32)
-    if len(control) == 0:
+    control_rows = np.flatnonzero(control_mask)
+    if len(control_rows) == 0:
         raise ValueError("prediction requires control cells")
-    set_size = min(8, len(control))
-    control = control[:set_size, : config.context_length]
-    if control.shape[0] < 8:
-        repeats = np.resize(np.arange(control.shape[0]), 8)
-        control = control[repeats]
+    # Sample n_cells control cells per prediction set (paper default 64); wrap-pad
+    # when fewer control cells are available so the set is always full.
+    used_rows = control_rows[:n_cells]
+    if len(used_rows) < n_cells:
+        used_rows = used_rows[np.resize(np.arange(len(used_rows)), n_cells)]
+    control = np.asarray(matrix[used_rows][:, : config.context_length], dtype=np.float32)
     x_current = torch.as_tensor(control[None, :, :], dtype=torch.float32)
     mask = torch.zeros_like(x_current, dtype=torch.bool)
     gene_ids = torch.arange(config.context_length).repeat(1, 1)
@@ -51,7 +55,7 @@ def predict_adata(
             mask = mask | step
     assert final is not None
     var = adata.var.iloc[: config.context_length].copy()
-    obs = adata.obs[control_mask].iloc[: final.shape[1]].copy()
+    obs = adata.obs.iloc[used_rows].copy()
     obs["perturbation"] = perturbation
     pred = AnnData(X=final.squeeze(0).cpu().numpy(), obs=obs, var=var)
     target = Path(output_path)

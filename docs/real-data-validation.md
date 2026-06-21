@@ -108,8 +108,39 @@ loss:first10 ≈ 126.5772 → last10 ≈ 1.9188;参数 3.89M。
 | ENSG00000168538 | 0.169 | 0.47 | 0.10 | 0.54 | 0.552 |
 | ENSG00000104866 | 0.162 | 0.52 | 0.00 | 0.96 | 0.448 |
 
+### 库训练入口(`train_model`,2026-06-21)
+
+由 `scripts/validate_real_libpipeline.py` 驱动,产物在 `runs/real_hepg2_libpipeline/`。**数据、400 基因架构、超参(batch 4 / set 16 / 300 步 / lr 3e-4 / seed 0 / CPU)与 validate_real 完全相同**,唯一区别是训练走库的 `train_model` → `compute_batch_loss` + warmup-cosine 调度 + `PriorStore`,而非内联循环。因此指标差异可干净归因到 pipeline 本身。
+
+与内联循环的实质差异:
+- `compute_batch_loss` 每步**多跑一次 full-reveal forward** 取真正的 target cell embedding 喂对比损失(内联循环用 `out.cell_embedding.detach()`,退化为自身);
+- loss 额外接收 `prior_missing` / `prior_source_names`;
+- warmup-cosine 学习率调度(内联循环为恒定 lr)。
+
+| 指标 | 均值 |
+|---|---|
+| MAE | 0.5037 |
+| pearson_delta | 0.2941 |
+| overlap_at_n | 0.1958 |
+| direction_match | 0.6006 |
+| delta_norm_ratio | 0.6261 |
+
+loss:first10 ≈ 132.24 → last10 ≈ 1.8185。
+
+### 三方对比
+
+| 指标 | 旧基线 | validate_real(新代码内联) | 库 pipeline(train_model) | 方向 |
+|---|---|---|---|---|
+| MAE | 0.5019 | 0.5019 | 0.5037 | 越低越好 |
+| pearson_delta | 0.3159 | 0.3159 | 0.2941 | 越高越好 |
+| overlap_at_n | 0.125 | 0.125 | **0.1958** | 越高越好 |
+| direction_match | 0.57 | 0.57 | **0.6006** | 越高越好 |
+| delta_norm_ratio | 0.6879 | 0.6879 | 0.6261 | 越接近 1 |
+
+**结论:** 库 pipeline 牺牲少量 `pearson_delta`(−0.022),换来明显更高的 `overlap_at_n`(+57%)与 `direction_match`(+0.03),即更准地选中差异基因、判对上下调方向;最终 loss 也更低(1.82 vs 1.92)。这验证了新增的真 target-embedding 对比损失 + warmup-cosine 调度确实改善了扰动方向性,而内联循环没有触及这些路径。
+
 ## 备注
 
-- **为何新旧结果完全相同:** 该 commit 主要改写库的 `training.py` 训练入口,而 `validate_real.py` 使用自己内联的训练循环,只调用 `data / model / losses / inference / evaluation`。这些路径在 `seed=0` + CPU 确定性下数值轨迹一致,故指标一字不差——即新代码在本真实数据验证链路上与旧代码行为等价。
+- **validate_real 内联循环为何与旧基线完全相同:** "align training pipeline" commit 主要改写库的 `training.py` 入口;`validate_real.py` 用自己的内联循环,只调用 `data / model / losses / inference / evaluation`,这些路径在 `seed=0` + CPU 确定性下数值轨迹一致,故指标一字不差。要测到 pipeline 改动须改用 `train_model`(见上)。
 - 评估为 CPU 小配置(400 基因 / 300 步),意在跑通真实数据全链路并给方向性指标,非完整规模训练。
 - 整体方向性偏弱:`direction_match` 0.57(0.5=随机)、`overlap_at_n` 0.125、`pearson_delta` 0.32,模型能学到扰动方向但逐基因特异性有限。
