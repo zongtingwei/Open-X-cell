@@ -171,6 +171,9 @@ def train_model(
     weight_decay: float | None = None,
     device: str | None = None,
     scgpt_init: str | Path | None = None,
+    scgpt_warm_start: str | Path | None = None,
+    gene_id_map: str | Path | None = None,
+    scgpt_min_overlap: float = 0.95,
     loss_weights: "LossConfig | None" = None,
 ) -> TrainingResult:
     train_cfg = _training_config_with_overrides(
@@ -200,7 +203,19 @@ def train_model(
     )
     loader = DataLoader(dataset, batch_size=train_cfg.batch_size, shuffle=True, collate_fn=collate_samples)
     model = OpenXCellModel(model_cfg).to(train_cfg.device)
-    if scgpt_init is not None:
+    if scgpt_warm_start is not None:
+        from open_x_cell.scgpt import warm_start_from_scgpt
+        ens2sym = torch.load(gene_id_map, map_location="cpu") if gene_id_map is not None else None
+        stats = warm_start_from_scgpt(
+            model, list(adata.var_names), scgpt_warm_start,
+            ens2sym=ens2sym, min_overlap=scgpt_min_overlap,
+        )
+        print(f"scGPT warm-start: mapped {stats.n_mapped}/{stats.n_genes} "
+              f"({stats.overlap:.1%}; symbol={stats.n_via_symbol}, ensembl={stats.n_via_ensembl}, "
+              f"fallback={stats.n_fallback}); transformer tensors loaded={stats.loaded_tensors}")
+        for note in stats.notes:
+            print(f"  note: {note}")
+    elif scgpt_init is not None:
         table = load_gene_embedding_table(scgpt_init)
         n_init, n_total = init_gene_embedding_from_table(model, list(adata.var_names), table)
         print(f"scGPT init: {n_init}/{n_total} gene embeddings initialized from {scgpt_init}")

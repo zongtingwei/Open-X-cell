@@ -139,6 +139,27 @@ loss:first10 ≈ 132.24 → last10 ≈ 1.8185。
 
 **结论:** 库 pipeline 牺牲少量 `pearson_delta`(−0.022),换来明显更高的 `overlap_at_n`(+57%)与 `direction_match`(+0.03),即更准地选中差异基因、判对上下调方向;最终 loss 也更低(1.82 vs 1.92)。这验证了新增的真 target-embedding 对比损失 + warmup-cosine 调度确实改善了扰动方向性,而内联循环没有触及这些路径。
 
+### scGPT 初始化对照(512-d 架构,2026-06-21)
+
+由 `scripts/validate_mini_scgpt.py` 驱动,产物在 `runs/mini_scgpt/`。论文 Mini 把 gene embedding 从预训练 scGPT 初始化(该 embedding 同时流入输入 gene token 和第 6 个 gene-identity cross-attention context token),Open-X-Cell 此前从零随机初始化——这是与论文「最系统性的偏差」。本实验测它的实际影响。
+
+- **数据**:`hepg2nadig_mini2k.h5ad`(3900 cells × 2000 genes,同 12 扰动,scGPT 覆盖 98%)。
+- **架构**:紧凑 512-d 配置(6 层 / 512 hidden / 8 heads / ReLU / LayerNorm / Post-LN);hidden=512 正好等于 scGPT 维度,可直接初始化。严格 4000-基因 mini 在单卡 48G 上 OOM(注意力 O(genes²)),故用 2000 基因 + 6 层的可行配置。
+- **scGPT 资产**:`data/priors/scgpt_gene_embedding.npz`(18532×512,由本地 scGPT `encoder.embedding.weight` 按 hepg2 ENSG 对齐抽取)。
+- **两臂**:仅 `scgpt_init` 有无之差,其余(数据/架构/超参 batch1/set16/600步/lr3e-4/seed0/GPU)完全相同。
+
+| 指标 | base(随机 init) | scgpt init | delta | 方向 |
+|---|---|---|---|---|
+| MAE | 0.5258 | 0.5068 | −0.019 | 越低越好 |
+| pearson_delta | 0.1934 | **0.3506** | **+0.157(+81%)** | 越高越好 |
+| overlap_at_n | 0.0625 | **0.1458** | **+0.083(+133%)** | 越高越好 |
+| direction_match | 0.5612 | 0.6236 | +0.062 | 越高越好 |
+| delta_norm_ratio | 0.5009 | 0.6600 | +0.159 | 越接近 1 |
+
+训练 loss:base 87.9→2.64,scgpt 82.0→2.40(起点和终点都更低)。scGPT init 注入 1961/2000 个 gene embedding。
+
+**结论:** 仅补上 scGPT 初始化,真实 HepG2 扰动预测的 **pearson_delta 几乎翻倍、overlap@N 翻倍多**,每一项指标都改善。这证实了之前一致性核对中判定的「最系统性偏差」确实重要——scGPT 初始化对扰动方向性和差异基因选择有实质贡献。
+
 ## 备注
 
 - **validate_real 内联循环为何与旧基线完全相同:** "align training pipeline" commit 主要改写库的 `training.py` 入口;`validate_real.py` 用自己的内联循环,只调用 `data / model / losses / inference / evaluation`,这些路径在 `seed=0` + CPU 确定性下数值轨迹一致,故指标一字不差。要测到 pipeline 改动须改用 `train_model`(见上)。

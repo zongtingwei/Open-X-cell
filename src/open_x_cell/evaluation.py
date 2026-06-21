@@ -20,6 +20,21 @@ def _pearson(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
     return (x @ y) / denom
 
 
+def _rankdata(x: torch.Tensor) -> torch.Tensor:
+    """Average ranks (ties shared), like scipy.stats.rankdata, for Spearman."""
+    order = torch.argsort(x)
+    ranks = torch.empty_like(x)
+    ranks[order] = torch.arange(1, x.numel() + 1, dtype=x.dtype, device=x.device)
+    # average tied ranks so constant inputs don't bias the correlation
+    uniq, inv, counts = torch.unique(x, return_inverse=True, return_counts=True)
+    sums = torch.zeros(uniq.numel(), dtype=x.dtype, device=x.device).scatter_add_(0, inv, ranks)
+    return (sums / counts)[inv]
+
+
+def _spearman(x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+    return _pearson(_rankdata(x), _rankdata(y))
+
+
 def perturbation_metrics(
     prediction: torch.Tensor,
     truth: torch.Tensor,
@@ -42,10 +57,34 @@ def perturbation_metrics(
     return {
         "mae": float((pred - true).abs().mean().item()),
         "pearson_delta": float(_pearson(pred_delta, true_delta).clamp(-1, 1).item()),
+        "de_spearman_lfc": float(_spearman(pred_delta, true_delta).clamp(-1, 1).item()),
         "overlap_at_n": float(len(pred_top & true_top) / top_n),
         "direction_match": float(same_direction.item()),
         "delta_norm_ratio": float((pred_delta.norm() / (true_delta.norm() + 1e-8)).item()),
     }
+
+
+def centroid_accuracy(
+    pred_centroids: dict[str, torch.Tensor],
+    true_centroids: dict[str, torch.Tensor],
+) -> dict[str, float]:
+    """Nearest-centroid classification accuracy across perturbations (cell-eval).
+
+    Each predicted perturbation centroid is assigned to the nearest *true* centroid
+    (Euclidean) among all perturbations; accuracy is the fraction assigned to their
+    own perturbation. Requires >= 2 perturbations to be meaningful.
+    """
+    perts = [p for p in pred_centroids if p in true_centroids]
+    if len(perts) < 2:
+        return {"centroid_accuracy": float("nan"), "n_perturbations": len(perts)}
+    true_mat = torch.stack([_as_tensor(true_centroids[p]) for p in perts])
+    correct = 0
+    for i, p in enumerate(perts):
+        pred = _as_tensor(pred_centroids[p])
+        dists = (true_mat - pred[None, :]).pow(2).sum(dim=1)
+        if int(dists.argmin().item()) == i:
+            correct += 1
+    return {"centroid_accuracy": correct / len(perts), "n_perturbations": len(perts)}
 
 
 def evaluate_prediction_files(truth_path: str | Path, pred_path: str | Path, output_path: str | Path) -> dict[str, float]:

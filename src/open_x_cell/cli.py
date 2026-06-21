@@ -53,6 +53,13 @@ def build_parser() -> argparse.ArgumentParser:
     train.add_argument("--scgpt-init", default=None,
                        help="Path to a gene->embedding table (.npz with genes/embeddings) "
                             "to initialize gene embeddings from scGPT. Requires hidden_dim to match.")
+    train.add_argument("--scgpt-warm-start", default=None,
+                       help="Path to a pretrained scGPT model dir (vocab.json + best_model.pt) "
+                            "for full warm-start: gene embedding + value encoder + transformer layers.")
+    train.add_argument("--gene-id-map", default=None,
+                       help="Path to an Ensembl->symbol mapping (.pt) used by scGPT warm-start.")
+    train.add_argument("--scgpt-min-overlap", type=float, default=0.95,
+                       help="Minimum gene-vocab overlap for scGPT warm-start (warns below).")
     train.add_argument("--l1-output", type=float, default=None,
                        help="Weight of the L1 output regularization term (paper: Mini=1.0).")
     _add_prior_args(train)
@@ -102,6 +109,9 @@ def main(argv: list[str] | None = None) -> int:
             normalize=args.normalize,
             prior_files=_prior_files_from_args(args),
             scgpt_init=args.scgpt_init,
+            scgpt_warm_start=args.scgpt_warm_start,
+            gene_id_map=args.gene_id_map,
+            scgpt_min_overlap=args.scgpt_min_overlap,
             loss_weights=loss_weights,
         )
         return 0
