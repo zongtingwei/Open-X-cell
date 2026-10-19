@@ -3,7 +3,6 @@
     <img src="./assets/xcell-paper-title-authors.png" width="1000" alt="X-Cell paper, first page: original title and complete author list.">
   </a>
 </p>
-<p align="center"><sub>Wang et al., X-Cell (2026). First-page title and author crop · <a href="https://creativecommons.org/licenses/by-nc/4.0/">CC BY-NC 4.0</a>.</sub></p>
 
 <div align="center">
 
@@ -290,6 +289,8 @@ The released model uses public Orion HCT116 and HEK293T data, with a declared cl
 Mini is the released trained model. Tiny is intended for smoke tests. Ultra configuration and curriculum code are available, but an Ultra checkpoint and the paper's multi-billion-parameter FSDP2 stack are not included. Historical notes under `docs/` describe earlier experiments; this README and the release manifest define the current release.
 
 The code is [MIT licensed](LICENSE). The third-party data and fixed-prior assets retain their upstream terms and attribution: [X-Atlas-Orion](https://huggingface.co/datasets/Xaira-Therapeutics/X-Atlas-Orion), [ESM](https://github.com/facebookresearch/esm), [STRING](https://string-db.org/), [GenePT](https://github.com/yiqunchen/GenePT), [DepMap](https://depmap.org/portal/), and [JUMP Cell Painting](https://github.com/jump-cellpainting/).
+
+Paper screenshot: first-page title and author crop from [Wang et al. (2026)](https://doi.org/10.64898/2026.03.18.712807), under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
 
 ## Repository guide
 
