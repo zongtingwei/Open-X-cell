@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 import torch
 
 from open_x_cell.config import ModelConfig
@@ -92,15 +93,72 @@ def test_warm_start_transfers_embeddings_and_transformer(tmp_path):
     model = OpenXCellModel(cfg)
     var_names = symbols  # all map directly by symbol
     q_before = model.blocks[0].attn.q_proj.weight.clone()
+    value_before = model.value_encoder[0].weight.detach().clone()
     stats = warm_start_from_scgpt(model, var_names, model_dir, ens2sym={}, min_overlap=0.9)
     assert stats.n_mapped == 5 and stats.n_fallback == 0
     assert stats.transformer_loaded and stats.loaded_tensors > 0
+    assert not stats.value_encoder_loaded
     # gene embedding row 0 == scGPT GENEA embedding
     assert torch.allclose(model.gene_embedding.weight[0], state["encoder.embedding.weight"][vocab["GENEA"]])
     # fused Wqkv was split correctly into q_proj
     assert torch.allclose(model.blocks[0].attn.q_proj.weight,
                           state["transformer_encoder.layers.0.self_attn.Wqkv.weight"][:cfg.hidden_dim])
     assert not torch.allclose(q_before, model.blocks[0].attn.q_proj.weight)
+    assert torch.equal(model.value_encoder[0].weight, value_before)
+
+
+def test_warm_start_value_encoder_is_explicit_legacy_opt_in(tmp_path):
+    model_dir, _, state, symbols = _fake_scgpt_dir(tmp_path)
+    model = OpenXCellModel(_mini_compatible_config(num_genes=5))
+
+    stats = warm_start_from_scgpt(
+        model,
+        symbols,
+        model_dir,
+        ens2sym={},
+        min_overlap=0.9,
+        load_value_encoder=True,
+    )
+
+    assert stats.value_encoder_loaded
+    assert torch.allclose(
+        model.value_encoder[0].weight,
+        state["value_encoder.linear1.weight"],
+    )
+
+
+def test_warm_start_preserves_random_embedding_for_unmapped_gene(tmp_path):
+    model_dir, vocab, state, _ = _fake_scgpt_dir(tmp_path)
+    model = OpenXCellModel(_mini_compatible_config(num_genes=2))
+    missing_before = model.gene_embedding.weight[1].detach().clone()
+
+    stats = warm_start_from_scgpt(
+        model,
+        ["GENEA", "MISSING"],
+        model_dir,
+        ens2sym={},
+        min_overlap=0.4,
+    )
+
+    assert stats.n_mapped == 1 and stats.n_fallback == 1
+    assert torch.allclose(
+        model.gene_embedding.weight[0],
+        state["encoder.embedding.weight"][vocab["GENEA"]],
+    )
+    assert torch.allclose(model.gene_embedding.weight[1], missing_before)
+
+
+def test_warm_start_rejects_incomplete_transformer_without_mutating_model(tmp_path):
+    model_dir, _, state, symbols = _fake_scgpt_dir(tmp_path)
+    del state["transformer_encoder.layers.0.linear1.weight"]
+    torch.save(state, model_dir / "best_model.pt")
+    model = OpenXCellModel(_mini_compatible_config(num_genes=5))
+    before = {name: tensor.detach().clone() for name, tensor in model.state_dict().items()}
+
+    with pytest.raises(ValueError, match="incomplete scGPT transformer layer 0"):
+        warm_start_from_scgpt(model, symbols, model_dir, ens2sym={}, min_overlap=0.9)
+
+    assert all(torch.equal(before[name], tensor) for name, tensor in model.state_dict().items())
 
 
 def test_warm_start_skips_transformer_for_incompatible_arch(tmp_path):

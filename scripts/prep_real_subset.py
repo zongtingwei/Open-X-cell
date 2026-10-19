@@ -1,61 +1,156 @@
-"""Build a compact, CPU-sized real perturb-seq subset (HepG2 Nadig CRISPRi)
-mapped to the Open-X-Cell obs schema. Real X-Atlas/Pisces-style data."""
-import anndata as ad, numpy as np, pandas as pd
+"""Build a compact HepG2 Nadig subset using the Open-X-Cell observation schema."""
+from __future__ import annotations
 
-SRC = "/public2/YouYuning/zongtingwei/vcc_benchmarks/datasets/hepg2nadig.h5ad"
-OUT = "data/real/hepg2nadig_subset.h5ad"
-N_PERT = 12          # number of real perturbations to keep
-N_CTRL = 1500        # control (non-targeting) cells
-PANEL = 400          # gene panel size (num_genes/context_length)
-CELLS_PER_PERT = 200
-rng = np.random.default_rng(0)
+import argparse
+from pathlib import Path
 
-a = ad.read_h5ad(SRC, backed='r')
-obs = a.obs
-is_ctrl = (obs['transcript'] == 'non-targeting').to_numpy()
-gene_id = obs['gene_id'].astype(str).to_numpy()           # ENSG, matches var_names
-var_ensg = np.asarray(a.var_names)
-ensg_to_col = {g: i for i, g in enumerate(var_ensg)}
+import anndata as ad
+import numpy as np
+import pandas as pd
 
-# candidate perturbations: targeted, ENSG present in var, enough cells
-pert_counts = pd.Series(gene_id[~is_ctrl]).value_counts()
-cand = [g for g in pert_counts.index
-        if g in ensg_to_col and pert_counts[g] >= CELLS_PER_PERT][:N_PERT]
-print("chosen perturbations (ENSG):", cand)
 
-# gene panel: the perturbed genes + top-expressed genes by var mean
-mean_expr = pd.to_numeric(a.var['mean-1'], errors='coerce').to_numpy()
-order = np.argsort(np.nan_to_num(mean_expr))[::-1]
-panel_cols = list(dict.fromkeys([ensg_to_col[g] for g in cand] +
-                                [int(i) for i in order]))[:PANEL]
-panel_cols = sorted(panel_cols)
-panel_ensg = var_ensg[panel_cols]
-print("panel size:", len(panel_cols))
+def parse_args(
+    argv: list[str] | None = None,
+    *,
+    default_output: str = "data/real/hepg2nadig_subset.h5ad",
+    default_panel: int = 400,
+) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source", required=True, help="Source HepG2 Nadig AnnData file.")
+    parser.add_argument("--output", default=default_output)
+    parser.add_argument("--n-perturbations", type=int, default=12)
+    parser.add_argument("--n-controls", type=int, default=1_500)
+    parser.add_argument("--panel-size", type=int, default=default_panel)
+    parser.add_argument("--cells-per-perturbation", type=int, default=200)
+    parser.add_argument("--seed", type=int, default=0)
+    return parser.parse_args(argv)
 
-# pick rows: controls + cells for each perturbation
-ctrl_rows = np.flatnonzero(is_ctrl)
-ctrl_rows = rng.choice(ctrl_rows, size=min(N_CTRL, len(ctrl_rows)), replace=False)
-rows = [ctrl_rows]
-labels = ['control'] * len(ctrl_rows)
-for g in cand:
-    r = np.flatnonzero((gene_id == g) & ~is_ctrl)
-    r = rng.choice(r, size=min(CELLS_PER_PERT, len(r)), replace=False)
-    rows.append(r); labels += [g] * len(r)
-rows = np.concatenate(rows)
 
-X = a.X[rows][:, panel_cols]
-X = X.toarray() if hasattr(X, 'toarray') else np.asarray(X, dtype=np.float32)
-labels = np.array(labels)
-new_obs = pd.DataFrame({
-    'perturbation': labels,
-    'context': 'hepg2',
-    'batch': 'batch0',
-    'is_control': labels == 'control',
-})
-sub = ad.AnnData(X=X.astype(np.float32), obs=new_obs,
-                 var=pd.DataFrame(index=panel_ensg))
-sub.write_h5ad(OUT)
-print("wrote", OUT, sub.shape,
-      "| controls", int((labels=='control').sum()),
-      "| perts", len(cand))
-print("X log1p? max=%.2f mean=%.3f" % (X.max(), X.mean()))
+def main(
+    argv: list[str] | None = None,
+    *,
+    default_output: str = "data/real/hepg2nadig_subset.h5ad",
+    default_panel: int = 400,
+) -> int:
+    args = parse_args(
+        argv,
+        default_output=default_output,
+        default_panel=default_panel,
+    )
+    positive = {
+        "n_perturbations": args.n_perturbations,
+        "n_controls": args.n_controls,
+        "panel_size": args.panel_size,
+        "cells_per_perturbation": args.cells_per_perturbation,
+    }
+    invalid = [name for name, value in positive.items() if value <= 0]
+    if invalid:
+        raise ValueError(f"subset sizes must be positive: {invalid}")
+    if args.seed < 0:
+        raise ValueError("seed must be non-negative")
+
+    source = Path(args.source).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    output = Path(args.output).resolve()
+    temporary = output.with_suffix(".tmp.h5ad")
+    if source in {output, temporary}:
+        raise ValueError("output and temporary paths must not overwrite the source AnnData")
+
+    rng = np.random.default_rng(args.seed)
+    adata = ad.read_h5ad(source, backed="r")
+    try:
+        required_obs = {"transcript", "gene_id"}
+        missing_obs = sorted(required_obs - set(adata.obs))
+        if missing_obs:
+            raise ValueError(f"source AnnData lacks obs columns: {missing_obs}")
+        if "mean-1" not in adata.var:
+            raise ValueError("source AnnData lacks var['mean-1']")
+        if not adata.var_names.is_unique:
+            raise ValueError("source AnnData has duplicate gene IDs")
+
+        obs = adata.obs
+        is_control = obs["transcript"].astype(str).eq("non-targeting").to_numpy()
+        gene_id = obs["gene_id"].astype(str).to_numpy()
+        var_ensembl = adata.var_names.astype(str).to_numpy()
+        ensembl_to_column = {gene: index for index, gene in enumerate(var_ensembl)}
+
+        perturbation_counts = pd.Series(gene_id[~is_control]).value_counts()
+        candidates = [
+            gene
+            for gene in perturbation_counts.index.astype(str)
+            if gene in ensembl_to_column
+            and perturbation_counts[gene] >= args.cells_per_perturbation
+        ][: args.n_perturbations]
+        if len(candidates) != args.n_perturbations:
+            raise ValueError(
+                f"requested {args.n_perturbations} perturbations but only "
+                f"{len(candidates)} satisfy the cell-count and gene-panel requirements"
+            )
+
+        mean_expression = pd.to_numeric(adata.var["mean-1"], errors="coerce").to_numpy()
+        order = np.argsort(np.nan_to_num(mean_expression))[::-1]
+        panel_columns = list(
+            dict.fromkeys(
+                [ensembl_to_column[gene] for gene in candidates]
+                + [int(index) for index in order]
+            )
+        )[: args.panel_size]
+        panel_columns.sort()
+        if len(panel_columns) != args.panel_size:
+            raise ValueError(
+                f"requested a {args.panel_size}-gene panel but source has only "
+                f"{len(panel_columns)} eligible genes"
+            )
+        panel_ensembl = var_ensembl[panel_columns]
+
+        control_pool = np.flatnonzero(is_control)
+        if len(control_pool) < args.n_controls:
+            raise ValueError(
+                f"requested {args.n_controls} controls but source contains {len(control_pool)}"
+            )
+        row_groups = [
+            rng.choice(control_pool, size=args.n_controls, replace=False)
+        ]
+        labels = ["control"] * args.n_controls
+        for gene in candidates:
+            pool = np.flatnonzero((gene_id == gene) & ~is_control)
+            row_groups.append(
+                rng.choice(pool, size=args.cells_per_perturbation, replace=False)
+            )
+            labels.extend([gene] * args.cells_per_perturbation)
+        rows = np.concatenate(row_groups)
+
+        matrix = adata.X[rows][:, panel_columns]
+        if hasattr(matrix, "toarray"):
+            matrix = matrix.toarray()
+        matrix = np.asarray(matrix, dtype=np.float32)
+    finally:
+        adata.file.close()
+
+    label_array = np.asarray(labels)
+    subset = ad.AnnData(
+        X=matrix,
+        obs=pd.DataFrame(
+            {
+                "perturbation": label_array,
+                "context": "hepg2",
+                "batch": "batch0",
+                "is_control": label_array == "control",
+            }
+        ),
+        var=pd.DataFrame(index=panel_ensembl),
+    )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    subset.write_h5ad(temporary)
+    temporary.replace(output)
+    print(
+        f"wrote {output} {subset.shape} | controls {args.n_controls} | "
+        f"perturbations {len(candidates)}",
+        flush=True,
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

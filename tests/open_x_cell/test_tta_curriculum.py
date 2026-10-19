@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import torch
 
 from open_x_cell.config import TrainingConfig, tiny_config
@@ -54,8 +55,55 @@ def test_tta_adapts_and_freezes_cross_attention():
     for before, p in zip(cross_before, model.cross_blocks.parameters()):
         assert torch.allclose(before, p)
         assert p.requires_grad
+    assert model.training
     # a non-frozen parameter did update
     assert not torch.allclose(gene_emb_before, model.gene_embedding.weight)
+
+
+def test_tta_rejects_negative_seed():
+    cfg = tiny_config()
+    with pytest.raises(ValueError, match="seed must be a non-negative integer"):
+        adapt_model_tta(
+            OpenXCellModel(cfg),
+            cfg,
+            np.zeros((8, cfg.context_length), dtype=np.float32),
+            steps=1,
+            set_size=4,
+            seed=-1,
+        )
+
+
+def test_tta_validation_failure_preserves_model_state_flags_and_mode():
+    cfg = tiny_config()
+    model = OpenXCellModel(cfg)
+    model.eval()
+    flags_before = [parameter.requires_grad for parameter in model.parameters()]
+
+    with pytest.raises(ValueError, match="one entry per control matrix column"):
+        adapt_model_tta(
+            model,
+            cfg,
+            np.zeros((8, cfg.context_length), dtype=np.float32),
+            steps=1,
+            set_size=4,
+            gene_ids=np.arange(cfg.context_length - 1),
+        )
+
+    assert not model.training
+    assert [parameter.requires_grad for parameter in model.parameters()] == flags_before
+
+
+def test_tta_rejects_boolean_learning_rate():
+    cfg = tiny_config()
+    with pytest.raises(ValueError, match="learning_rate"):
+        adapt_model_tta(
+            OpenXCellModel(cfg),
+            cfg,
+            np.zeros((8, cfg.context_length), dtype=np.float32),
+            steps=1,
+            learning_rate=True,
+            set_size=4,
+        )
 
 
 def test_predict_with_tta_runs(tmp_path):

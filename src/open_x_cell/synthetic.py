@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from numbers import Integral
+
 import numpy as np
 import pandas as pd
 from anndata import AnnData
@@ -11,10 +13,27 @@ def make_synthetic_adata(
     n_perturbations: int = 8,
     seed: int = 0,
 ) -> AnnData:
+    integer_values = {
+        "n_cells": n_cells,
+        "n_genes": n_genes,
+        "n_perturbations": n_perturbations,
+        "seed": seed,
+    }
+    invalid = [
+        name
+        for name, value in integer_values.items()
+        if isinstance(value, bool) or not isinstance(value, Integral)
+    ]
+    if invalid:
+        raise ValueError(f"synthetic-data arguments must be integers: {invalid}")
     if n_cells <= 0 or n_genes <= 1:
         raise ValueError("n_cells must be positive and n_genes must be greater than 1")
     if n_perturbations <= 0 or n_perturbations >= n_genes:
         raise ValueError("n_perturbations must be positive and smaller than n_genes")
+    if n_cells < n_perturbations + 1:
+        raise ValueError("n_cells must provide at least one control and one cell per perturbation")
+    if seed < 0:
+        raise ValueError("seed must be non-negative")
 
     rng = np.random.default_rng(seed)
     gene_names = np.array([f"GENE_{idx}" for idx in range(n_genes)])

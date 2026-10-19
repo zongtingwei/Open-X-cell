@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+from numbers import Integral, Real
 
 import torch
 
 
 def _generator(seed: int | None, device: torch.device | None = None) -> torch.Generator:
+    if seed is not None and (
+        isinstance(seed, bool) or not isinstance(seed, Integral) or seed < 0
+    ):
+        raise ValueError("seed must be a non-negative integer or None")
     gen = torch.Generator(device=device.type if device is not None and device.type != "mps" else "cpu")
     if seed is not None:
-        gen.manual_seed(seed)
+        gen.manual_seed(int(seed))
     return gen
 
 
@@ -16,19 +22,39 @@ def make_reveal_mask(
     batch_size: int,
     set_size: int,
     num_genes: int,
-    fraction: float,
+    fraction: float | Sequence[float],
     seed: int | None = None,
     device: torch.device | None = None,
 ) -> torch.Tensor:
-    if not 0 <= fraction <= 1:
-        raise ValueError("fraction must be between 0 and 1")
-    if batch_size <= 0 or set_size <= 0 or num_genes <= 0:
-        raise ValueError("batch_size, set_size, and num_genes must be positive")
+    dimensions = (batch_size, set_size, num_genes)
+    if any(
+        isinstance(value, bool) or not isinstance(value, Integral) or value <= 0
+        for value in dimensions
+    ):
+        raise ValueError("batch_size, set_size, and num_genes must be positive integers")
 
-    reveal_count = math.floor(fraction * num_genes)
+    if isinstance(fraction, bool):
+        raise ValueError("fraction must contain real values between 0 and 1")
+    if isinstance(fraction, Real):
+        fractions = [float(fraction)] * batch_size
+    else:
+        fractions = list(fraction)
+        if len(fractions) != batch_size:
+            raise ValueError("fraction sequence length must equal batch_size")
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not math.isfinite(value)
+        or not 0 <= value <= 1
+        for value in fractions
+    ):
+        raise ValueError("fraction must be between 0 and 1")
+    fractions = list(map(float, fractions))
+
     mask = torch.zeros(batch_size, num_genes, dtype=torch.bool)
     gen = _generator(seed)
-    for batch_idx in range(batch_size):
+    for batch_idx, value in enumerate(fractions):
+        reveal_count = math.floor(value * num_genes)
         if reveal_count:
             indices = torch.randperm(num_genes, generator=gen)[:reveal_count]
             mask[batch_idx, indices] = True
@@ -50,10 +76,17 @@ def cumulative_reveal_steps(
     seed: int | None = None,
     device: torch.device | None = None,
 ) -> list[torch.Tensor]:
-    if num_genes <= 0:
-        raise ValueError("num_genes must be positive")
-    if tuple(sorted(fractions)) != fractions:
-        raise ValueError("fractions must be sorted in ascending order")
+    if isinstance(num_genes, bool) or not isinstance(num_genes, Integral) or num_genes <= 0:
+        raise ValueError("num_genes must be a positive integer")
+    if not isinstance(fractions, tuple) or any(
+        isinstance(value, bool)
+        or not isinstance(value, Real)
+        or not math.isfinite(value)
+        for value in fractions
+    ):
+        raise ValueError("fractions must be a tuple of finite real values")
+    if tuple(sorted(fractions)) != fractions or len(set(fractions)) != len(fractions):
+        raise ValueError("fractions must be strictly increasing")
     if not fractions or fractions[-1] != 1.0:
         raise ValueError("fractions must end at 1.0")
 

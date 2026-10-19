@@ -2,8 +2,9 @@
 
   base       — random init (reference)
   embed      — scGPT gene-embedding init only (npz table)
-  warmstart  — full scGPT warm-start: gene embedding + value encoder + transformer
-               layers (Ensembl->symbol mapping, 95% overlap check, <pad> fallback)
+  warmstart  — Appendix-A.7 scGPT warm-start: gene embedding, embedding norm,
+               and transformer layers (Ensembl->symbol mapping and 95% overlap
+               check; unmapped genes retain their random initialization)
 
 Everything else identical (data / arch / hyperparams / seed). Reports the cell-eval
 metrics including DE Spearman LFC (per-pert) and Centroid Accuracy (across perts).
@@ -78,7 +79,7 @@ res["base"] = run_arm("base")
 res["embed"] = run_arm("embed", scgpt_init=SCGPT_NPZ)
 res["warmstart"] = run_arm("warmstart", scgpt_warm_start=SCGPT_DIR, gene_id_map=ENS2SYM)
 
-print("\n=== ladder: base -> embed-init -> full warm-start (512-d real HepG2) ===")
+print("\n=== ladder: base -> embed-init -> Appendix-A.7 warm-start (512-d real HepG2) ===")
 keys = list(res["base"].keys())
 hdr = f"{'metric':18s} {'base':>9s} {'embed':>9s} {'warmstart':>9s}"
 print(hdr)

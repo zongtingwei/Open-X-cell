@@ -12,6 +12,20 @@ def test_make_reveal_mask_reveals_exact_fraction_per_sample():
     assert torch.equal(mask[0, 0], mask[0, 1])
 
 
+def test_make_reveal_mask_accepts_independent_fraction_per_sample():
+    mask = make_reveal_mask(
+        batch_size=2,
+        set_size=3,
+        num_genes=20,
+        fraction=(0.25, 0.75),
+        seed=9,
+    )
+
+    assert mask[0, 0].sum().item() == 5
+    assert mask[1, 0].sum().item() == 15
+    assert torch.equal(mask[:, 0], mask[:, 2])
+
+
 def test_mix_control_target_uses_target_where_mask_is_true():
     ctrl = torch.zeros(1, 2, 4)
     target = torch.ones(1, 2, 4)

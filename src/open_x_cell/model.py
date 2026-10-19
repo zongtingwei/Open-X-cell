@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from typing import NamedTuple
 
 import torch
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.checkpoint import checkpoint
 
 from open_x_cell.config import ModelConfig
 from open_x_cell.priors import PRIOR_SOURCES, PriorBatch
 
 
-@dataclass(frozen=True)
-class ModelOutput:
+class ModelOutput(NamedTuple):
     expression: torch.Tensor
     cell_embedding: torch.Tensor
     prior_reconstructions: dict[str, torch.Tensor]
@@ -38,12 +38,20 @@ def _norm(kind: str, dim: int) -> nn.Module:
 
 
 class QKNormMultiheadAttention(nn.Module):
-    def __init__(self, hidden_dim: int, num_heads: int, bias: bool, use_qk_norm: bool) -> None:
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_heads: int,
+        bias: bool,
+        use_qk_norm: bool,
+        dropout: float = 0.0,
+    ) -> None:
         super().__init__()
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.head_dim = hidden_dim // num_heads
         self.use_qk_norm = use_qk_norm
+        self.dropout = float(dropout)
         self.q_proj = nn.Linear(hidden_dim, hidden_dim, bias=bias)
         self.k_proj = nn.Linear(hidden_dim, hidden_dim, bias=bias)
         self.v_proj = nn.Linear(hidden_dim, hidden_dim, bias=bias)
@@ -78,19 +86,37 @@ class QKNormMultiheadAttention(nn.Module):
             q = self._qk_norm(q, self.q_scale)
             k = self._qk_norm(k, self.k_scale)
 
-        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        # scaled_dot_product_attention selects Flash / memory-efficient kernels on
+        # supported CUDA devices.  The previous implementation materialized the
+        # complete [batch, heads, query, key] score tensor, which makes the paper's
+        # 2k--19k-gene contexts impossible to run even though the model itself is
+        # comparatively small.
+        attn_mask = None
         if key_padding_mask is not None:
-            scores = scores.masked_fill(key_padding_mask[:, None, None, :], torch.finfo(scores.dtype).min)
-        weights = F.softmax(scores, dim=-1)
-        attended = torch.matmul(weights, v)
+            # SDPA boolean masks use True for entries that are allowed to attend.
+            attn_mask = (~key_padding_mask)[:, None, None, :]
+        attended = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=attn_mask,
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=False,
+        )
         return self.out_proj(self._merge_heads(attended))
 
 
 class FeedForward(nn.Module):
-    def __init__(self, config: ModelConfig) -> None:
+    def __init__(
+        self,
+        config: ModelConfig,
+        *,
+        activation: str | None = None,
+        ffn_dim: int | None = None,
+    ) -> None:
         super().__init__()
-        self.activation = config.activation
-        ffn_dim = config.effective_ffn_dim
+        self.activation = activation or config.activation
+        ffn_dim = ffn_dim if ffn_dim is not None else config.effective_ffn_dim
         if self.activation == "swiglu":
             self.gate = nn.Linear(config.hidden_dim, ffn_dim, bias=False)
             self.up = nn.Linear(config.hidden_dim, ffn_dim, bias=False)
@@ -121,12 +147,14 @@ class TransformerBlock(nn.Module):
             config.num_heads,
             bias=config.attention_bias,
             use_qk_norm=config.use_qk_norm,
+            dropout=config.dropout,
         )
         self.ffn = FeedForward(config)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if self.pre_norm:
-            x = x + self.attn(self.attn_norm(x), self.attn_norm(x), self.attn_norm(x))
+            normalized = self.attn_norm(x)
+            x = x + self.attn(normalized, normalized, normalized)
             x = x + self.ffn(self.ffn_norm(x))
             return x
         x = self.attn_norm(x + self.attn(x, x, x))
@@ -136,22 +164,29 @@ class TransformerBlock(nn.Module):
 class CrossAttentionBlock(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
-        self.pre_norm = config.pre_norm
-        self.query_norm = _norm(config.norm, config.hidden_dim)
-        self.ffn_norm = _norm(config.norm, config.hidden_dim)
+        self.pre_norm = config.effective_cross_attention_pre_norm
+        cross_norm = config.effective_cross_attention_norm
+        self.query_norm = _norm(cross_norm, config.hidden_dim)
+        self.ffn_norm = _norm(cross_norm, config.hidden_dim)
         self.attn = QKNormMultiheadAttention(
             config.hidden_dim,
             config.num_heads,
             bias=config.attention_bias,
             use_qk_norm=config.use_qk_norm,
+            dropout=config.dropout,
         )
-        self.ffn = FeedForward(config)
+        self.ffn = FeedForward(
+            config,
+            activation=config.effective_cross_attention_activation,
+            ffn_dim=config.effective_cross_attention_ffn_dim,
+        )
 
     def forward(self, x: torch.Tensor, context: torch.Tensor, key_padding_mask: torch.Tensor | None) -> torch.Tensor:
         query = self.query_norm(x) if self.pre_norm else x
         x = x + self.attn(query, context, context, key_padding_mask=key_padding_mask)
         if self.pre_norm:
             return x + self.ffn(self.ffn_norm(x))
+        x = self.query_norm(x)
         return self.ffn_norm(x + self.ffn(x))
 
 
@@ -180,13 +215,18 @@ class PriorProjector(nn.Module):
             }
         )
 
-    def forward(self, priors: PriorBatch) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    def forward(
+        self,
+        priors: PriorBatch,
+        reconstruct: bool = True,
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         projected = []
         reconstructions = {}
         for source in PRIOR_SOURCES:
             token = self.projectors[source](priors.values[source])
             projected.append(token)
-            reconstructions[source] = self.decoders[source](token)
+            if reconstruct:
+                reconstructions[source] = self.decoders[source](token)
         return torch.stack(projected, dim=1), reconstructions
 
 
@@ -224,13 +264,32 @@ class OpenXCellModel(nn.Module):
         self.scalar_head = nn.Linear(d, 1)
         self.gene_bias = nn.Embedding(config.num_genes, 1)
         nn.init.zeros_(self.gene_bias.weight)
+        # Only one output path is architectural for a given size. Mark the other
+        # head non-trainable so distributed training does not carry permanently
+        # unused gradients.
+        if config.tied_output:
+            self.scalar_head.requires_grad_(False)
+        else:
+            self.gene_bias.requires_grad_(False)
+        # This is a runtime memory option, not part of the architecture.  It is
+        # enabled by the production trainer for long gene contexts.
+        self.gradient_checkpointing = False
 
-    def _expand_gene_ids(self, gene_ids: torch.Tensor, batch: int, set_size: int) -> torch.Tensor:
+    def set_gradient_checkpointing(self, enabled: bool = True) -> None:
+        self.gradient_checkpointing = bool(enabled)
+
+    def _expand_gene_ids(
+        self,
+        gene_ids: torch.Tensor,
+        batch: int,
+        set_size: int,
+        num_genes: int,
+    ) -> torch.Tensor:
         if gene_ids.dim() == 2:
             gene_ids = gene_ids[:, None, :].expand(batch, set_size, gene_ids.shape[-1])
-        if gene_ids.shape != (batch, set_size, self.config.context_length):
+        if gene_ids.shape != (batch, set_size, num_genes):
             raise ValueError(
-                "gene_ids must have shape [batch, context_length] or [batch, set_size, context_length]"
+                "gene_ids must have shape [batch, genes] or [batch, set_size, genes]"
             )
         return gene_ids
 
@@ -250,8 +309,9 @@ class OpenXCellModel(nn.Module):
         perturbation_ids: torch.Tensor,
         batch: int,
         set_size: int,
+        reconstruct_priors: bool,
     ) -> tuple[torch.Tensor, torch.Tensor, dict[str, torch.Tensor]]:
-        external, reconstructions = self.prior_projector(priors)
+        external, reconstructions = self.prior_projector(priors, reconstruct=reconstruct_priors)
         gene_context = self.gene_embedding(perturbation_ids).detach()[:, None, :]
         context = torch.cat([external, gene_context], dim=1)
         gene_missing = torch.zeros(batch, 1, dtype=torch.bool, device=priors.missing.device)
@@ -266,14 +326,15 @@ class OpenXCellModel(nn.Module):
         gene_h = h[:, 1:, :]
         cell_h = h[:, :1, :].expand(-1, gene_h.shape[1], -1)
         decoded = self.decoder(torch.cat([gene_h, cell_h], dim=-1))
-        flat_gene_ids = gene_ids.reshape(batch * set_size, self.config.context_length)
+        num_genes = gene_ids.shape[-1]
+        flat_gene_ids = gene_ids.reshape(batch * set_size, num_genes)
         if self.config.tied_output:
             raw_gene = self.gene_embedding(flat_gene_ids)
             bias = self.gene_bias(flat_gene_ids).squeeze(-1)
             expression = (decoded * raw_gene).sum(dim=-1) / math.sqrt(self.config.hidden_dim) + bias
         else:
             expression = self.scalar_head(decoded).squeeze(-1)
-        return expression.reshape(batch, set_size, self.config.context_length)
+        return expression.reshape(batch, set_size, num_genes)
 
     def forward(
         self,
@@ -282,23 +343,73 @@ class OpenXCellModel(nn.Module):
         gene_ids: torch.Tensor,
         perturbation_ids: torch.Tensor,
         priors: PriorBatch,
+        skip_cross_attention: bool = False,
+        reconstruct_priors: bool = True,
     ) -> ModelOutput:
         if x.shape != mask.shape:
             raise ValueError("x and mask must have the same shape")
+        if x.dim() != 3:
+            raise ValueError("x and mask must have shape [batch, set, genes]")
+        if not torch.is_floating_point(x):
+            raise ValueError("x must have a floating-point dtype")
+        if not torch.isfinite(x).all():
+            raise ValueError("x contains non-finite expression values")
+        if mask.dtype != torch.bool:
+            raise ValueError("mask must have boolean dtype")
         batch, set_size, genes = x.shape
-        if genes != self.config.context_length:
-            raise ValueError("input gene dimension must equal config.context_length")
-        gene_ids = self._expand_gene_ids(gene_ids.to(x.device), batch, set_size)
+        if batch <= 0 or set_size <= 0 or genes <= 0 or genes > self.config.num_genes:
+            raise ValueError("input gene dimension must be between 1 and config.num_genes")
+        gene_ids = self._expand_gene_ids(gene_ids.to(x.device), batch, set_size, genes)
         perturbation_ids = perturbation_ids.to(x.device)
+        if gene_ids.dtype not in {torch.int32, torch.int64}:
+            raise ValueError("gene_ids must have an integer dtype")
+        if perturbation_ids.dtype not in {torch.int32, torch.int64}:
+            raise ValueError("perturbation_ids must have an integer dtype")
+        if perturbation_ids.shape != (batch,):
+            raise ValueError("perturbation_ids must have shape [batch]")
+        if torch.any(gene_ids < 0) or torch.any(gene_ids >= self.config.num_genes):
+            raise ValueError("gene_ids contain an index outside the model vocabulary")
+        if torch.any(perturbation_ids < 0) or torch.any(
+            perturbation_ids >= self.config.num_genes
+        ):
+            raise ValueError("perturbation_ids contain an index outside the model vocabulary")
+        if priors.source_names != PRIOR_SOURCES:
+            raise ValueError("prior source ordering does not match the model's expected sources")
+        if priors.missing.shape != (batch, len(PRIOR_SOURCES)):
+            raise ValueError("prior missing mask must have shape [batch, number_of_sources]")
+        if priors.missing.dtype != torch.bool:
+            raise ValueError("prior missing mask must have boolean dtype")
+        for source in PRIOR_SOURCES:
+            expected = (batch, self.config.prior_dims[source])
+            if source not in priors.values or priors.values[source].shape != expected:
+                raise ValueError(f"{source} prior values must have shape {expected}")
+            if not torch.is_floating_point(priors.values[source]):
+                raise ValueError(f"{source} prior values must be floating-point tensors")
         priors = priors.to(x.device)
         h = self._encode_tokens(x, mask.to(x.device), gene_ids)
-        context, missing, reconstructions = self._prior_context(priors, perturbation_ids, batch, set_size)
+        if skip_cross_attention:
+            context = missing = None
+            reconstructions = {}
+        else:
+            context, missing, reconstructions = self._prior_context(
+                priors,
+                perturbation_ids,
+                batch,
+                set_size,
+                reconstruct_priors,
+            )
 
+        use_checkpoint = self.gradient_checkpointing and self.training and torch.is_grad_enabled()
         for layer_idx, block in enumerate(self.blocks):
-            h = block(h)
+            h = checkpoint(block, h, use_reentrant=False) if use_checkpoint else block(h)
             layer_key = str(layer_idx)
-            if layer_key in self.cross_blocks:
-                h = self.cross_blocks[layer_key](h, context, missing)
+            if not skip_cross_attention and layer_key in self.cross_blocks:
+                assert context is not None and missing is not None
+                cross_block = self.cross_blocks[layer_key]
+                if use_checkpoint:
+                    h = checkpoint(cross_block, h, context, missing, use_reentrant=False)
+                else:
+                    h = cross_block(h, context, missing)
         h = self.final_norm(h)
         expression = self._decode(h, gene_ids, batch, set_size)
         cell_embedding = h[:, 0, :].reshape(batch, set_size, self.config.hidden_dim)

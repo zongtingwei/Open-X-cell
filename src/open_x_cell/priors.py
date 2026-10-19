@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Integral
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ from open_x_cell.config import ModelConfig
 
 
 PRIOR_SOURCES: tuple[str, ...] = ("esm", "string", "genept", "depmap", "cell_painting")
+MISSING_GENE_KEYS = {"", "nan", "none", "null"}
 
 
 @dataclass(frozen=True)
@@ -29,8 +31,8 @@ class PriorBatch:
 
 
 def make_zero_priors(batch_size: int, config: ModelConfig, device: torch.device | str | None = None) -> PriorBatch:
-    if batch_size <= 0:
-        raise ValueError("batch_size must be positive")
+    if isinstance(batch_size, bool) or not isinstance(batch_size, Integral) or batch_size <= 0:
+        raise ValueError("batch_size must be a positive integer")
     target = torch.device(device) if device is not None else None
     values = {
         source: torch.zeros(batch_size, config.prior_dims[source], dtype=torch.float32, device=target)
@@ -40,15 +42,24 @@ def make_zero_priors(batch_size: int, config: ModelConfig, device: torch.device 
     return PriorBatch(values=values, missing=missing, source_names=PRIOR_SOURCES)
 
 
+def _clean_gene_keys(genes, source: Path) -> np.ndarray:
+    cleaned = np.asarray([str(gene).strip() for gene in genes])
+    if any(gene.lower() in MISSING_GENE_KEYS for gene in cleaned):
+        raise ValueError(f"{source} contains an empty or missing gene key")
+    if len(set(cleaned.tolist())) != len(cleaned):
+        raise ValueError(f"{source} contains duplicate gene keys after whitespace normalization")
+    return cleaned
+
+
 def _load_prior_table(path: str | Path, expected_dim: int) -> dict[str, np.ndarray]:
     source = Path(path)
     suffix = source.suffix.lower()
     if suffix == ".npz":
-        payload = np.load(source, allow_pickle=False)
-        if "genes" not in payload or "embeddings" not in payload:
-            raise ValueError(f"{source} must contain 'genes' and 'embeddings' arrays")
-        genes = payload["genes"].astype(str)
-        values = np.asarray(payload["embeddings"], dtype=np.float32)
+        with np.load(source, allow_pickle=False) as payload:
+            if "genes" not in payload or "embeddings" not in payload:
+                raise ValueError(f"{source} must contain 'genes' and 'embeddings' arrays")
+            genes = payload["genes"].astype(str)
+            values = np.asarray(payload["embeddings"], dtype=np.float32)
     else:
         if suffix == ".parquet":
             frame = pd.read_parquet(source)
@@ -62,8 +73,15 @@ def _load_prior_table(path: str | Path, expected_dim: int) -> dict[str, np.ndarr
         values = frame.drop(columns=[gene_column]).to_numpy(dtype=np.float32)
     if values.ndim != 2:
         raise ValueError(f"{source} must contain a 2D embedding matrix")
+    if values.shape[0] != len(genes):
+        raise ValueError(f"{source} has {len(genes)} gene keys but {values.shape[0]} embedding rows")
     if values.shape[1] != expected_dim:
         raise ValueError(f"{source} has dim {values.shape[1]}, expected {expected_dim}")
+    if not len(genes):
+        raise ValueError(f"{source} contains no embeddings")
+    genes = _clean_gene_keys(genes, source)
+    if not np.isfinite(values).all():
+        raise ValueError(f"{source} contains non-finite embedding values")
     return {gene: values[idx].copy() for idx, gene in enumerate(genes)}
 
 
@@ -75,11 +93,11 @@ def load_gene_embedding_table(path: str | Path) -> dict[str, np.ndarray]:
     """
     source = Path(path)
     if source.suffix.lower() == ".npz":
-        payload = np.load(source, allow_pickle=False)
-        if "genes" not in payload or "embeddings" not in payload:
-            raise ValueError(f"{source} must contain 'genes' and 'embeddings' arrays")
-        genes = payload["genes"].astype(str)
-        values = np.asarray(payload["embeddings"], dtype=np.float32)
+        with np.load(source, allow_pickle=False) as payload:
+            if "genes" not in payload or "embeddings" not in payload:
+                raise ValueError(f"{source} must contain 'genes' and 'embeddings' arrays")
+            genes = payload["genes"].astype(str)
+            values = np.asarray(payload["embeddings"], dtype=np.float32)
     else:
         if source.suffix.lower() == ".parquet":
             frame = pd.read_parquet(source)
@@ -91,6 +109,13 @@ def load_gene_embedding_table(path: str | Path) -> dict[str, np.ndarray]:
         values = frame.drop(columns=[gene_column]).to_numpy(dtype=np.float32)
     if values.ndim != 2:
         raise ValueError(f"{source} must contain a 2D embedding matrix")
+    if values.shape[0] != len(genes):
+        raise ValueError(f"{source} has {len(genes)} gene keys but {values.shape[0]} embedding rows")
+    if not len(genes):
+        raise ValueError(f"{source} contains no embeddings")
+    genes = _clean_gene_keys(genes, source)
+    if not np.isfinite(values).all():
+        raise ValueError(f"{source} contains non-finite embedding values")
     return {gene: values[idx].copy() for idx, gene in enumerate(genes)}
 
 
@@ -104,6 +129,8 @@ def init_gene_embedding_from_table(
     ``(n_initialized, n_total)``. Requires the table width to equal hidden_dim.
     """
     weight = model.gene_embedding.weight
+    if not table:
+        raise ValueError("gene embedding table is empty")
     n_rows, hidden = weight.shape
     sample = next(iter(table.values()))
     if sample.shape[0] != hidden:
@@ -137,10 +164,10 @@ class PriorStore:
     def from_files(cls, files: dict[str, str | Path | None], config: ModelConfig) -> PriorStore:
         embeddings = {source: {} for source in PRIOR_SOURCES}
         for source, path in files.items():
-            if path is None:
-                continue
             if source not in PRIOR_SOURCES:
                 raise ValueError(f"unknown prior source {source!r}; choose from {', '.join(PRIOR_SOURCES)}")
+            if path is None:
+                continue
             embeddings[source] = _load_prior_table(path, config.prior_dims[source])
         return cls(embeddings=embeddings)
 
@@ -150,9 +177,18 @@ class PriorStore:
         for source, values in mapping.items():
             if source not in PRIOR_SOURCES:
                 raise ValueError(f"unknown prior source {source!r}; choose from {', '.join(PRIOR_SOURCES)}")
-            embeddings[source] = {
-                gene: np.asarray(vector, dtype=np.float32).copy() for gene, vector in values.items()
-            }
+            normalized: dict[str, np.ndarray] = {}
+            for gene, vector in values.items():
+                key = str(gene).strip()
+                if key.lower() in MISSING_GENE_KEYS:
+                    raise ValueError(f"{source} prior contains an empty or missing gene key")
+                if key in normalized:
+                    raise ValueError(f"{source} prior contains duplicate gene key {key!r}")
+                array = np.asarray(vector, dtype=np.float32)
+                if array.ndim != 1 or not np.isfinite(array).all():
+                    raise ValueError(f"{source} prior for {key!r} must be a finite vector")
+                normalized[key] = array.copy()
+            embeddings[source] = normalized
         return cls(embeddings=embeddings)
 
     def batch_for_perturbations(

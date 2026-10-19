@@ -1,4 +1,6 @@
-from open_x_cell.config import ModelConfig, TrainingConfig, mini_config, tiny_config, ultra_config
+import pytest
+
+from open_x_cell.config import LossConfig, ModelConfig, TrainingConfig, mini_config, tiny_config, ultra_config
 
 
 def test_tiny_config_is_small_and_internally_consistent():
@@ -20,6 +22,10 @@ def test_mini_config_matches_paper_shape():
     assert cfg.num_heads == 8
     assert cfg.cross_attention_layers == (2, 5, 8, 11)
     assert cfg.use_qk_norm is False
+    assert cfg.effective_cross_attention_ffn_dim == 2048
+    assert cfg.effective_cross_attention_activation == "swiglu"
+    assert cfg.effective_cross_attention_norm == "rmsnorm"
+    assert cfg.effective_cross_attention_pre_norm is True
 
 
 def test_ultra_config_matches_paper_shape():
@@ -50,3 +56,8 @@ def test_training_config_defaults_are_local_smoke_safe():
     assert cfg.learning_rate == 1e-3
     assert cfg.max_steps == 10
     assert cfg.weight_decay == 0.01
+
+
+def test_loss_config_rejects_negative_weights():
+    with pytest.raises(ValueError, match="non-negative"):
+        LossConfig(mmd=-1.0)
