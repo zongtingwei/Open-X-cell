@@ -7,7 +7,7 @@
 <div align="center">
 
 <h1>Open-X-Cell</h1>
-<h3>Train and run a clean-room X-Cell model</h3>
+<h3>Training and inference for X-Cell</h3>
 
 <p align="center">Part of the <a href="https://github.com/youlab2025/UPM"><strong>UPM</strong></a> project.</p>
 
