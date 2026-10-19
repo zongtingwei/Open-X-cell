@@ -310,14 +310,27 @@ Run the tests with `python -m pytest -q`. Report reproducible issues through [Gi
 
 ## Citation
 
-If you use this code or the released checkpoint in your research, please cite our paper:
+If you use this code, please cite our paper.
 
-> **How Much Can AI Virtual Cells Gain from Unified Perturbational Modeling?**
-
-Publication details and BibTeX will be added here when available.
+```bibtex
+@misc{upm2026,
+  title={How Much Can AI Virtual Cells Gain from Unified Perturbational Modeling?},
+  year={2026},
+  note={Manuscript in preparation},
+  url={https://github.com/youlab2025/UPM}
+}
+```
 
 For the original X-Cell method, please cite:
 
-> **X-Cell: Scaling Causal Perturbation Prediction Across Diverse Cellular Contexts via Diffusion Language Models**
->
-> Chloe Wang et al. · bioRxiv (2026) · [doi:10.64898/2026.03.18.712807](https://doi.org/10.64898/2026.03.18.712807).
+```bibtex
+@article{wang2026xcell,
+  title={X-Cell: Scaling Causal Perturbation Prediction Across Diverse Cellular Contexts via Diffusion Language Models},
+  author={Wang, Chloe and Karimzadeh, Mehran and Ravindra, Neal G. and Bounds, Lexi R. and Alerasool, Nader and Huang, Ann C. and Ma, Shihao and Gulbranson, Daniel R. and Cui, Haotian and Lee, Yongju and Arjavalingam, Anusuya and MacKrell, Elliot J. and Wilken, Matthew S. and Chen, Jieming and Herken, Benjamin W. and Weber, Jesse A. and Onesto, Massimo M. and Gonzalez-Teran, Barbara and Leung, Nicole F. and Shi, Sally Yu and Smith, Byron J. and Lam, Sharon K. and Barner, Adam and Wright, Philip and Rumsey, Elizabeth M. and Kim, Soohong and Sit, Rene V. and Litterman, Adam J. and Chu, Ci and Wang, Bo},
+  journal={bioRxiv},
+  year={2026},
+  doi={10.64898/2026.03.18.712807},
+  url={https://doi.org/10.64898/2026.03.18.712807},
+  publisher={openRxiv}
+}
+```
