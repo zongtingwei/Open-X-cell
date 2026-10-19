@@ -5,7 +5,7 @@
 
 <p>
 <a href="https://github.com/zongtingwei/Open-X-cell"><img src="https://img.shields.io/badge/GitHub-Code-171C2C?style=flat-square&logo=github" alt="Code"></a>
-<a href="https://github.com/zongtingwei/Open-X-cell/releases/tag/v0.2.0"><img src="https://img.shields.io/badge/Checkpoint-Mini%2060M-8054B3?style=flat-square" alt="Mini checkpoint"></a>
+<a href="https://huggingface.co/zongting/Open-X-cell"><img src="https://img.shields.io/badge/Hugging%20Face-Checkpoint-FFD21E?style=flat-square&logo=huggingface" alt="Mini checkpoint"></a>
 <img src="https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10 or later">
 <img src="https://img.shields.io/badge/PyTorch-%E2%89%A52.3-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="PyTorch 2.3 or later">
 <img src="https://img.shields.io/badge/Training%20%2B%20Inference-Included-25A78E?style=flat-square" alt="Training and inference included">
@@ -67,11 +67,11 @@ Both the training and inference entry points are installed by the same package. 
 python -m pip install git+https://github.com/zongtingwei/Open-X-cell.git
 ```
 
-The examples below use files from the repository checkout. Access to this private repository and its releases requires an authorized GitHub account.
+The examples below use files from the repository checkout. Access to this private code repository requires an authorized GitHub account. The checkpoint is hosted separately on Hugging Face and requires an authorized HF account.
 
 ## Pretrained model
 
-The [v0.2.0 release](https://github.com/zongtingwei/Open-X-cell/releases/tag/v0.2.0) contains `open-x-cell-mini-orion.tar.gz` and `SHA256SUMS`.
+The [Hugging Face model repository](https://huggingface.co/zongting/Open-X-cell) contains the original `checkpoint.pt`, portable Safetensors weights, all five fixed priors, configuration, vocabulary, checksums, and HEK293T examples. Training and inference source code are maintained in this GitHub repository.
 
 | Property | Released checkpoint |
 | :--- | :--- |
@@ -86,22 +86,22 @@ The [v0.2.0 release](https://github.com/zongtingwei/Open-X-cell/releases/tag/v0.
 
 The bundle retains available prior rows for the checkpoint vocabulary. Missing gene/source combinations keep the model's existing missing-prior behavior. It includes no optimizer state; use a training run's `latest.pt` for exact resume, or the released weights for a fresh fine-tune.
 
-Install the [GitHub CLI](https://cli.github.com/), authenticate, and download:
+Authenticate with Hugging Face, then download the complete inference bundle:
 
 ```bash
-gh auth login
-open-x-cell-download --release v0.2.0 --output checkpoints/mini-orion
+hf auth login
+open-x-cell-download --output checkpoints/mini-orion
 ```
 
-Allow **4 GB of disk headroom** for the compressed download, extraction, and example outputs. The downloader validates the archive layout and every bundle file's size and SHA-256 before installing the directory. It refuses to overwrite an existing directory.
+The downloader uses the fixed HF revision specified in `open_x_cell.download.DEFAULT_REVISION`. To select another version, pass `--repo` and `--revision`. Allow **3 GB of disk headroom** for downloads and example outputs. Every bundle file's size and SHA-256 is checked before installation; existing directories are never overwritten.
 
-If you downloaded the archive from the release page, install it offline:
+The original PyTorch checkpoint is also available separately:
 
 ```bash
-open-x-cell-download \
-  --archive /path/to/open-x-cell-mini-orion.tar.gz \
-  --output checkpoints/mini-orion
+hf download zongting/Open-X-cell checkpoint.pt --revision v0.2.0 --local-dir checkpoints/original
 ```
+
+`checkpoint.pt` preserves the original training export. It contains model weights, configuration and vocabulary, but no optimizer state; exact training resume requires your run's `latest.pt`. Use the complete portable bundle for the inference examples below, because the fixed priors are also required.
 
 ```text
 checkpoints/mini-orion/

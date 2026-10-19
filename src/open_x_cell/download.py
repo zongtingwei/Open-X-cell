@@ -1,19 +1,17 @@
-"""Authenticated GitHub Release downloads, verified before installation."""
+"""Hugging Face checkpoint downloads, verified before installation."""
 from __future__ import annotations
 
 import argparse
 from pathlib import Path, PurePosixPath
 import shutil
-import subprocess
 import tarfile
 import tempfile
 
 from open_x_cell.bundle import BUNDLE_FILES, verify_bundle
 
 
-DEFAULT_REPO = "zongtingwei/Open-X-cell"
-DEFAULT_RELEASE = "v0.2.0"
-ASSET_NAME = "open-x-cell-mini-orion.tar.gz"
+DEFAULT_REPO = "zongting/Open-X-cell"
+DEFAULT_REVISION = "21b740c097b839eb413749fa6a5a7102d4d2b67d"
 
 
 def extract_bundle(archive: str | Path, output: str | Path) -> Path:
@@ -47,28 +45,35 @@ def extract_bundle(archive: str | Path, output: str | Path) -> Path:
 
 
 def download_bundle(output: str | Path, *, repo: str = DEFAULT_REPO,
-                    release: str = DEFAULT_RELEASE) -> Path:
+                    revision: str = DEFAULT_REVISION,
+                    token: str | bool | None = None) -> Path:
+    from huggingface_hub import snapshot_download
+
     target = Path(output).resolve()
     if target.exists():
         raise FileExistsError(target)
-    if not shutil.which("gh"):
-        raise RuntimeError("Install the GitHub CLI (gh) and run 'gh auth login' to download the release")
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".xcell-download-", dir=target.parent) as tmp:
-        subprocess.run(["gh", "release", "download", release, "--repo", repo,
-                        "--pattern", ASSET_NAME, "--dir", tmp], check=True)
-        return extract_bundle(Path(tmp) / ASSET_NAME, target)
+        stage = Path(tmp) / "bundle"
+        snapshot_download(repo_id=repo, revision=revision, token=token,
+                          local_dir=stage,
+                          allow_patterns=sorted(BUNDLE_FILES | {"manifest.json"}))
+        verify_bundle(stage)
+        shutil.rmtree(stage / ".cache", ignore_errors=True)
+        stage.rename(target)
+    return target
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True)
     parser.add_argument("--repo", default=DEFAULT_REPO)
-    parser.add_argument("--release", default=DEFAULT_RELEASE)
+    parser.add_argument("--revision", default=DEFAULT_REVISION,
+                        help="Hugging Face commit or tag (default: published checkpoint).")
     parser.add_argument("--archive", help="Install an already downloaded archive without network access.")
     args = parser.parse_args(argv)
     path = (extract_bundle(args.archive, args.output) if args.archive else
-            download_bundle(args.output, repo=args.repo, release=args.release))
+            download_bundle(args.output, repo=args.repo, revision=args.revision))
     print(path)
     return 0
 

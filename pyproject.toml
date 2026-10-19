@@ -11,6 +11,7 @@ dependencies = [
   "pandas",
   "scipy",
   "safetensors>=0.4",
+  "huggingface_hub>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -35,7 +36,7 @@ open-x-cell-export = "open_x_cell.bundle:main"
 
 [project.urls]
 Repository = "https://github.com/zongtingwei/Open-X-cell"
-Releases = "https://github.com/zongtingwei/Open-X-cell/releases"
+Checkpoint = "https://huggingface.co/zongting/Open-X-cell"
 
 [build-system]
 requires = ["setuptools>=68", "wheel"]

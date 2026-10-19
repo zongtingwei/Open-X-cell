@@ -15,6 +15,43 @@ from open_x_cell.synthetic import make_synthetic_adata
 from open_x_cell.inference import predict_adata
 
 
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_hf_download_verifies_before_install(source, tmp_path, monkeypatch, corrupt):
+    import shutil
+    import huggingface_hub
+    from open_x_cell.bundle import BUNDLE_FILES, export_bundle, verify_bundle
+    from open_x_cell.download import download_bundle
+    checkpoint, priors = source
+    remote = export_bundle(checkpoint, tmp_path / "remote", priors, trust_legacy_pickle=True)
+    calls = []
+
+    def snapshot_download(**kwargs):
+        calls.append(kwargs)
+        shutil.copytree(remote, kwargs["local_dir"], dirs_exist_ok=True)
+        if corrupt:
+            (Path(kwargs["local_dir"]) / "genes.json").write_text("[]")
+        return str(kwargs["local_dir"])
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    target = tmp_path / "installed"
+    options = dict(repo="test/model", revision="fixed-commit", token="test-token")
+    if corrupt:
+        with pytest.raises(ValueError, match="size|checksum"):
+            download_bundle(target, **options)
+        assert not target.exists()
+    else:
+        assert download_bundle(target, **options) == target
+        verify_bundle(target)
+        with pytest.raises(FileExistsError):
+            download_bundle(target, **options)
+    assert len(calls) == 1
+    assert calls[0]["repo_id"] == "test/model"
+    assert calls[0]["revision"] == "fixed-commit"
+    assert calls[0]["token"] == "test-token"
+    assert set(calls[0]["allow_patterns"]) == BUNDLE_FILES | {"manifest.json"}
+    assert not list(tmp_path.glob(".xcell-download-*"))
+
+
 @pytest.fixture
 def source(tmp_path):
     config = replace(tiny_config(), num_genes=24)
