@@ -9,6 +9,8 @@
 <h1>Open-X-Cell</h1>
 <h3>Train and run a clean-room X-Cell model</h3>
 
+<p align="center">A companion repository for the UPM work · <a href="https://github.com/youlab2025/UPM"><strong>UPM main repository</strong></a></p>
+
 <p>
 <a href="https://github.com/zongtingwei/Open-X-cell"><img src="https://img.shields.io/badge/GitHub-Code-171C2C?style=flat-square&logo=github" alt="Code"></a>
 <a href="https://huggingface.co/zongting/Open-X-cell"><img src="https://img.shields.io/badge/Hugging%20Face-Checkpoint-FFD21E?style=flat-square&logo=huggingface" alt="Mini checkpoint"></a>
@@ -30,6 +32,8 @@
 </div>
 
 ## Overview
+
+Open-X-Cell is a companion repository of [UPM (Unified Perturbation Modeling)](https://github.com/youlab2025/UPM), supporting the work *How Much Can AI Virtual Cells Gain from Unified Perturbational Modeling?* This repository provides the X-Cell implementation and checkpoint release; visit the UPM main repository for the overall project.
 
 **Open-X-Cell provides training, fine-tuning, inference, and evaluation for a clean-room PyTorch implementation of X-Cell.** It predicts gene-perturbation responses from control cells using a Transformer, five fixed biological priors, and four diffusion reveal steps.
 
