@@ -324,13 +324,12 @@ If you use this code, please cite our paper.
 For the original X-Cell method, please cite:
 
 ```bibtex
-@article{wang2026xcell,
-  title={X-Cell: Scaling Causal Perturbation Prediction Across Diverse Cellular Contexts via Diffusion Language Models},
-  author={Wang, Chloe and Karimzadeh, Mehran and Ravindra, Neal G. and Bounds, Lexi R. and Alerasool, Nader and Huang, Ann C. and Ma, Shihao and Gulbranson, Daniel R. and Cui, Haotian and Lee, Yongju and Arjavalingam, Anusuya and MacKrell, Elliot J. and Wilken, Matthew S. and Chen, Jieming and Herken, Benjamin W. and Weber, Jesse A. and Onesto, Massimo M. and Gonzalez-Teran, Barbara and Leung, Nicole F. and Shi, Sally Yu and Smith, Byron J. and Lam, Sharon K. and Barner, Adam and Wright, Philip and Rumsey, Elizabeth M. and Kim, Soohong and Sit, Rene V. and Litterman, Adam J. and Chu, Ci and Wang, Bo},
+@article{wang2026x,
+  title={X-cell: Scaling causal perturbation prediction across diverse cellular contexts via diffusion language models},
+  author={Wang, Chloe and Karimzadeh, Mehran and Ravindra, Neal G and Bounds, Lexi R and Alerasool, Nader and Huang, Ann C and Ma, Shihao and Gulbranson, Daniel R and Cui, Haotian and Lee, Yongju and others},
   journal={bioRxiv},
+  pages={2026--03},
   year={2026},
-  doi={10.64898/2026.03.18.712807},
-  url={https://doi.org/10.64898/2026.03.18.712807},
-  publisher={openRxiv}
+  publisher={Cold Spring Harbor Laboratory}
 }
 ```
