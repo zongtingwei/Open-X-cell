@@ -1,3 +1,10 @@
+<p align="center">
+  <a href="https://doi.org/10.64898/2026.03.18.712807">
+    <img src="./assets/xcell-paper-title-authors.png" width="1000" alt="X-Cell paper, first page: original title and complete author list.">
+  </a>
+</p>
+<p align="center"><sub>Wang et al., X-Cell (2026). First-page title and author crop · <a href="https://creativecommons.org/licenses/by-nc/4.0/">CC BY-NC 4.0</a>.</sub></p>
+
 <div align="center">
 
 <h1>Open-X-Cell</h1>
@@ -36,17 +43,6 @@ This release includes the working training implementation, a pretrained **Mini p
 | Inference | Single-gene perturbation prediction, context/batch-aware controls, multiple sampled control sets, four-step diffusion, and optional TTA through the research CLI. |
 | Portable model | Safetensors weights, architecture, gene vocabulary, all five fixed priors, provenance, and SHA-256 checksums. |
 | Evaluation | Built-in metrics, batch evaluation, and adapters for the separately installed `cell-eval` package. |
-
-```mermaid
-flowchart LR
-    C[Control expression] --> E[Gene and value encoding]
-    G[Perturbed gene] --> E
-    P[ESM-2 / STRING / GenePT / DepMap / Cell Painting] --> A[Prior cross-attention]
-    E --> A
-    A --> T[Transformer]
-    T --> D[Four-step diffusion reveal]
-    D --> O[Predicted expression]
-```
 
 ## Installation
 
