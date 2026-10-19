@@ -306,3 +306,17 @@ The code is [MIT licensed](LICENSE). The third-party data and fixed-prior assets
 | [tests/open_x_cell](tests/open_x_cell) | Training, inference, export, integrity, and numerical-parity tests. |
 
 Run the tests with `python -m pytest -q`. Report reproducible issues through [GitHub Issues](https://github.com/zongtingwei/Open-X-cell/issues), including the command, package versions, release tag, and error message.
+
+## Citation
+
+If you use this code or the released checkpoint in your research, please cite our paper:
+
+> **How Much Can AI Virtual Cells Gain from Unified Perturbational Modeling?**
+
+Publication details and BibTeX will be added here when available.
+
+For the original X-Cell method, please cite:
+
+> **X-Cell: Scaling Causal Perturbation Prediction Across Diverse Cellular Contexts via Diffusion Language Models**
+>
+> Chloe Wang et al. · bioRxiv (2026) · [doi:10.64898/2026.03.18.712807](https://doi.org/10.64898/2026.03.18.712807).
