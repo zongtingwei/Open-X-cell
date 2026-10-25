@@ -17,7 +17,7 @@
 <img src="https://img.shields.io/badge/Python-%E2%89%A53.10-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10 or later">
 <img src="https://img.shields.io/badge/PyTorch-%E2%89%A52.3-EE4C2C?style=flat-square&logo=pytorch&logoColor=white" alt="PyTorch 2.3 or later">
 <img src="https://img.shields.io/badge/Training%20%2B%20Inference-Included-25A78E?style=flat-square" alt="Training and inference included">
-<a href="LICENSE"><img src="https://img.shields.io/badge/Code-MIT-64748B?style=flat-square" alt="MIT code license"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-CC%20BY--NC%204.0-64748B?style=flat-square" alt="CC BY-NC 4.0 license"></a>
 </p>
 
 <p>
@@ -292,7 +292,7 @@ The released model uses public Orion HCT116 and HEK293T data, with a declared cl
 
 Mini is the released trained model. Tiny is intended for smoke tests. Ultra configuration and curriculum code are available, but an Ultra checkpoint and the paper's multi-billion-parameter FSDP2 stack are not included. Historical notes under `docs/` describe earlier experiments; this README and the release manifest define the current release.
 
-The code is [MIT licensed](LICENSE). The third-party data and fixed-prior assets retain their upstream terms and attribution: [X-Atlas-Orion](https://huggingface.co/datasets/Xaira-Therapeutics/X-Atlas-Orion), [ESM](https://github.com/facebookresearch/esm), [STRING](https://string-db.org/), [GenePT](https://github.com/yiqunchen/GenePT), [DepMap](https://depmap.org/portal/), and [JUMP Cell Painting](https://github.com/jump-cellpainting/).
+The code is licensed under [CC BY-NC 4.0](LICENSE) (Creative Commons Attribution-NonCommercial 4.0 International). The third-party data and fixed-prior assets retain their upstream terms and attribution: [X-Atlas-Orion](https://huggingface.co/datasets/Xaira-Therapeutics/X-Atlas-Orion), [ESM](https://github.com/facebookresearch/esm), [STRING](https://string-db.org/), [GenePT](https://github.com/yiqunchen/GenePT), [DepMap](https://depmap.org/portal/), and [JUMP Cell Painting](https://github.com/jump-cellpainting/).
 
 Paper screenshot: first-page title and author crop from [Wang et al. (2026)](https://doi.org/10.64898/2026.03.18.712807), under [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
 
