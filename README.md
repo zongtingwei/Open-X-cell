@@ -317,13 +317,12 @@ Run the tests with `python -m pytest -q`. Report reproducible issues through [Gi
 If you use this code, please cite our [paper](https://www.biorxiv.org/content/10.64898/2026.10.25.761625v1) (bioRxiv, 2026; DOI: [10.64898/2026.10.25.761625](https://doi.org/10.64898/2026.10.25.761625)).
 
 ```bibtex
-@article{upm2026,
-  title={How Much Can {AI} Virtual Cells Gain from Unified Perturbational Modeling?},
+@article{wei2026much,
+  title={How Much Can AI Virtual Cells Gain from Unified Perturbational Modeling?},
   author={Wei, Zongting and Ye, Yuedian and Cui, Shuguang and Ma, Wenjing and You, Yuning},
   journal={bioRxiv},
   year={2026},
-  doi={10.64898/2026.10.25.761625},
-  url={https://www.biorxiv.org/content/10.64898/2026.10.25.761625v1}
+  publisher={Cold Spring Harbor Laboratory}
 }
 ```
 
