@@ -33,7 +33,7 @@
 
 ## Overview
 
-Open-X-Cell is part of the [UPM (Unified Perturbation Modeling)](https://github.com/youlab2025/UPM) project, supporting the work *[How Much Can AI Virtual Cells Gain from Unified Perturbational Modeling?](https://www.biorxiv.org/content/10.64898/2026.10.25.761625v1)* This repository provides the X-Cell implementation and checkpoint release; visit the UPM main repository for the overall project.
+Open-X-Cell is part of the [UPM (Unified Perturbation Modeling)](https://github.com/youlab2025/UPM) project, supporting the work *[How Much Can AI Virtual Cells Gain from Unified Perturbational Modeling?](https://www.biorxiv.org/content/10.64898/2026.10.25.761625v2)* This repository provides the X-Cell implementation and checkpoint release; visit the UPM main repository for the overall project.
 
 **Open-X-Cell provides training, fine-tuning, inference, and evaluation for a clean-room PyTorch implementation of X-Cell.** It predicts gene-perturbation responses from control cells using a Transformer, five fixed biological priors, and four diffusion reveal steps.
 
@@ -314,7 +314,7 @@ Run the tests with `python -m pytest -q`. Report reproducible issues through [Gi
 
 ## Citation
 
-If you use this code, please cite our [paper](https://www.biorxiv.org/content/10.64898/2026.10.25.761625v1) (bioRxiv, 2026; DOI: [10.64898/2026.10.25.761625](https://doi.org/10.64898/2026.10.25.761625)).
+If you use this code, please cite our [paper](https://www.biorxiv.org/content/10.64898/2026.10.25.761625v2) (bioRxiv, 2026; DOI: [10.64898/2026.10.25.761625](https://doi.org/10.64898/2026.10.25.761625)).
 
 ```bibtex
 @article{wei2026much,
